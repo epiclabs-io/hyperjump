@@ -1,0 +1,42 @@
+{
+  "version": "v4",
+  "repo": "borisyankov/DefinitelyTyped",
+  "ref": "master",
+  "path": "typings",
+  "bundle": "typings/tsd.d.ts",
+  "installed": {
+    "node/node.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "loglevel/loglevel.d.ts": {
+      "commit": "308bdc83738955e8fe6fc87c3838cd2d69c76b4c"
+    },
+    "yargs/yargs.d.ts": {
+      "commit": "993f83fe84ba1381d006772dc3343e1b8d5304f3"
+    },
+    "ws/ws.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "serve-static/serve-static.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "mime/mime.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "express/express.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "express-serve-static-core/express-serve-static-core.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "errorhandler/errorhandler.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "method-override/method-override.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    },
+    "body-parser/body-parser.d.ts": {
+      "commit": "95eb7b2527a28281cdbf480c0560744bc5190465"
+    }
+  }
+}
