@@ -16,11 +16,11 @@ import * as http from "http";
 
 var log = loglevel.getLogger("MAIN");
 
-class Being{
-    private soul:string;
+class Being {
+    private soul: string;
 
-    constructor(soul:string){
-        this.soul=soul;
+    constructor(soul: string) {
+        this.soul = soul;
     }
 }
 
@@ -81,23 +81,34 @@ interface IObjectMetadata {
     id: number
 }
 
+interface ITypeMetadata {
+    name: string,
+    methods: Map<string, Function>
+}
+
 
 class Omniscient extends events.EventEmitter {
 
-    private objects: WeakMap<Object, IObjectMetadata>;
-    private proxies: WeakMap<Object, Object>;
+    private objects: WeakMap<any, IObjectMetadata>;
+    private proxies: WeakMap<any, any>;
+    private types: WeakMap<any, ITypeMetadata>;
+    public typeNames: Map<string, ITypeMetadata>;
+    private objectIds: Map<number, any>;
     private objectCounter: number = 0;
-    private agents: { [id: number]: Agent };
+    private agents: Map<number, Agent>;
 
     private root_: any;
 
     constructor(server: http.Server) {
         super();
-        this.agents = {};
-        this.proxies = new WeakMap<Object, Object>();
+        this.agents = new Map<number, Agent>();
+        this.proxies = new WeakMap<any, any>();
         let wss = new WebSocket.Server({ server: server });
         let agentId = 0;
         this.root_ = {};
+        this.types = new WeakMap<any, ITypeMetadata>();
+        this.typeNames = new Map<string, ITypeMetadata>();
+        this.objectIds = new Map<number, any>();
 
         wss.on("connection", (socket) => {
             let agent = new Agent(this, socket, agentId++);
@@ -119,7 +130,7 @@ class Omniscient extends events.EventEmitter {
     }
 
     private clean(agent: Agent) {
-        delete this.agents[agent.id];
+        this.agents.delete(agent.id);
     }
 
 
@@ -180,14 +191,38 @@ class Omniscient extends events.EventEmitter {
             id: this.objectCounter++
         }
         this.objects.set(obj, metadata);
+        this.objectIds.set(metadata.id, obj);
         this.emit("new", metadata);
 
 
         return metadata;
     }
 
+    public registerType(type: { new () }, name?: string): ITypeMetadata {
+        let typeInfo = this.types.get(type);
+        if (typeInfo)
+            throw new Error(`Type ${typeInfo.name} already registered`);
+
+        typeInfo = {
+            name: name || type.name,
+            methods: new Map<string, Function>()
+        }
+        this.types.set(type, typeInfo);
+        this.typeNames.set(typeInfo.name, typeInfo);
+        this.emit("newType", typeInfo);
+        return typeInfo;
+    }
+
+    public registerMethod(type: { new () }, func: Function, name?: string) {
+        let typeInfo = this.types.get(type);
+        if (!typeInfo) {
+            typeInfo = this.registerType(type);
+        }
+        typeInfo.methods.set(name || func.name, func);
+    }
+
     public serialize(obj: any): any {
-        //obj = this.getProxy(obj);
+
         if (typeof obj !== "object")
             return obj;
 
@@ -216,22 +251,30 @@ class Omniscient extends events.EventEmitter {
 
     }
 
-    public getAliveIds(arr: number[] = [], obj = this.root): number[] {
-        let keys = Object.keys(obj);
-        keys.forEach(key => {
-            let value = obj[key];
-
-            if (typeof value == "object") {
-                this.getAliveIds(arr, value);
-            }
-        });
-        arr.push(this.getMetadata(obj).id);
-
-        return arr;
+    public getAliveIds(): string[] {
+        return Object.keys(this.objectIds);
     }
 
-}
+    public gc(obj: any = null) {
 
+        if (obj == null) {
+            obj = this.root;
+            this.objectIds.clear();
+        }
+
+        let id = this.getMetadata(obj).id;
+        if (this.objectIds.has(id))
+            return;
+
+        let keys = Object.keys(obj);
+        keys.forEach((key) => {
+            let value = obj[key];
+            if (typeof value == "object") {
+                this.gc(value);
+            }
+        });
+    }
+}
 
 class Agent {
 
@@ -246,7 +289,7 @@ class Agent {
         this.om = om;
         this.socket = socket;
         this.id = id;
-        this.initialSync(om.root);
+        this.initialSync();
 
         om.on("new", (meta: IObjectMetadata) => {
             this.notifyNew(meta.originalObject);
@@ -259,18 +302,29 @@ class Agent {
 
     }
 
-    private initialSync(obj: any) {
+    private initialSync() {
+        
+        this.syncTypes();
+        this.syncObject(this.om.root);
+    }
+
+    private syncObject(obj:any){
         let keys = Object.keys(obj);
         keys.forEach(key => {
             let value = obj[key];
             if (typeof value == "object") {
-                this.initialSync(value);
+                this.syncObject(value);
             }
 
         });
 
         this.notifyNew(obj);
+    }
 
+    private syncTypes(){
+        for(let value of this.om.typeNames.values()){
+            this.notifyNewType(value);
+        }
     }
 
     private send(data: any) {
@@ -304,6 +358,19 @@ class Agent {
                 newValue: newValue
             }
         })
+    }
+
+    private notifyNewType(typeInfo: ITypeMetadata) {
+
+        let info = {
+            name: typeInfo.name,
+            methods: [...typeInfo.methods.keys()]
+        }
+
+        this.send({
+            command: "newType",
+            data: info
+        });
     }
 
 
