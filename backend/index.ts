@@ -16,12 +16,20 @@ import * as http from "http";
 
 var log = loglevel.getLogger("MAIN");
 
+class Being{
+    private soul:string;
 
-class Person {
+    constructor(soul:string){
+        this.soul=soul;
+    }
+}
+
+class Person extends Being {
     age: number;
     name: string;
 
     constructor(name: string, age: number) {
+        super(`${name}'s soul'`);
         this.name = name;
         this.age = age;
     }
@@ -74,39 +82,46 @@ interface IObjectMetadata {
 }
 
 
-class Ominscient extends events.EventEmitter {
+class Omniscient extends events.EventEmitter {
 
     private objects: WeakMap<Object, IObjectMetadata>;
+    private proxies: WeakMap<Object, Object>;
     private objectCounter: number = 0;
-    private clients: { [id: number]: Client };
+    private agents: { [id: number]: Agent };
+
+    private root_: any;
 
     constructor(server: http.Server) {
         super();
-        this.clients = {};
+        this.agents = {};
+        this.proxies = new WeakMap<Object, Object>();
         let wss = new WebSocket.Server({ server: server });
-        let clientId = 0;
+        let agentId = 0;
+        this.root_ = {};
 
         wss.on("connection", (socket) => {
-            let client = new Client(this, socket, clientId++);
+            let agent = new Agent(this, socket, agentId++);
 
             socket.on("error", (err) => {
-                this.clean(client);
+                this.clean(agent);
             });
 
             socket.on("close", (code, message) => {
-                this.clean(client);
+                this.clean(agent);
             });
 
-            this.emit("connection", client);
+            this.emit("connection", agent);
         });
 
 
         this.objects = new WeakMap<Object, IObjectMetadata>();
+        this.getProxy(this.root_);
     }
 
-    private clean(client: Client) {
-        delete this.clients[client.id];
+    private clean(agent: Agent) {
+        delete this.agents[agent.id];
     }
+
 
     private proxyHandler = {
         get: (target: any, property: PropertyKey) => {
@@ -118,6 +133,13 @@ class Ominscient extends events.EventEmitter {
                 return value;
         },
         set: (target: any, property: PropertyKey, value: any, receiver: any): boolean => {
+
+            if (typeof value == "object") {
+                let original = this.proxies.get(value);
+                if (original)
+                    value = original;
+            }
+
             target[property] = value;
             this.emit("set", target, property, value);
             return true;
@@ -125,19 +147,32 @@ class Ominscient extends events.EventEmitter {
     };
 
 
-
+    public get root(): any {
+        return this.root_;
+    }
 
     public getProxy<T>(obj: T): T {
 
         return this.getMetadata(obj).proxy;
     }
     public getMetadata<T>(obj: T): IObjectMetadata {
+
+        if (typeof obj != "object") {
+            throw new Error("can't get a proxy from a non-object");
+        }
+        //check if a proxy was passed instead of an original object.
+        let original = this.proxies.get(obj);
+        if (original) {
+            obj = original as T;
+        }
+
         let self = this;
         let metadata = this.objects.get(obj);
         if (metadata)
             return metadata;
 
         let pr = new Proxy(obj, this.proxyHandler);
+        this.proxies.set(pr, obj);
 
         metadata = {
             proxy: pr,
@@ -169,6 +204,8 @@ class Ominscient extends events.EventEmitter {
 
             if (typeof value == "object") {
                 ret[key] = { id: this.getMetadata(value).id };
+            } else if (typeof value == "function") {
+                ret[key] = { "_type": "function" };
             } else {
                 ret[key] = value;
             }
@@ -179,24 +216,188 @@ class Ominscient extends events.EventEmitter {
 
     }
 
+    public getAliveIds(arr: number[] = [], obj = this.root): number[] {
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            let value = obj[key];
+
+            if (typeof value == "object") {
+                this.getAliveIds(arr, value);
+            }
+        });
+        arr.push(this.getMetadata(obj).id);
+
+        return arr;
+    }
+
 }
 
 
-class Client {
+class Agent {
 
-    private om: Ominscient;
+    private om: Omniscient;
     private socket: WebSocket;
+    private sentObjects = new WeakSet();
     public id: number;
 
-    constructor(om: Ominscient, socket: WebSocket, id: number) {
+
+
+    constructor(om: Omniscient, socket: WebSocket, id: number) {
         this.om = om;
         this.socket = socket;
         this.id = id;
+        this.initialSync(om.root);
+
+        om.on("new", (meta: IObjectMetadata) => {
+            this.notifyNew(meta.originalObject);
+
+        });
+
+        om.on("set", (target: any, property: PropertyKey, value: any) => {
+            this.notifySet(target, property, value);
+        });
+
     }
 
-    public share(name:string, obj: any) {
+    private initialSync(obj: any) {
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            let value = obj[key];
+            if (typeof value == "object") {
+                this.initialSync(value);
+            }
+
+        });
+
+        this.notifyNew(obj);
 
     }
+
+    private send(data: any) {
+        this.socket.send(JSON.stringify(data));
+    }
+
+    private notifyNew(obj: any) {
+        if (this.sentObjects.has(obj))
+            return;
+
+        this.sentObjects.add(obj);
+        this.send({
+            command: "new",
+            id: this.om.getMetadata(obj).id,
+            data: this.om.serialize(obj)
+        });
+    }
+
+    private notifySet(obj: any, property: PropertyKey, newValue: any) {
+        if (typeof newValue == "object") {
+            newValue = { id: this.om.getMetadata(newValue).id };
+        }
+        else {
+            newValue = this.om.serialize(newValue);
+        }
+        this.send({
+            command: "set",
+            id: this.om.getMetadata(obj).id,
+            data: {
+                property: property,
+                newValue: newValue
+            }
+        })
+    }
+
+
+}
+
+
+interface ICommand {
+    command: string,
+    id: number,
+    data: any
+}
+
+class Client {
+
+    private socket: WebSocket;
+    public root: any;
+    private objects: { [id: number]: any };
+
+
+    constructor(url: string) {
+        this.socket = new WebSocket(url);
+        this.objects = {};
+
+
+        this.socket.on("open", () => {
+            console.log("socket open");
+        });
+
+        this.socket.on("message", (data, flags) => {
+            this.processMessage(JSON.parse(data));
+        })
+    }
+
+    private processMessage(cmd: ICommand) {
+        console.log(cmd);
+        switch (cmd.command) {
+            case "new":
+                {
+                    let obj = cmd.data;
+                    let id = cmd.id;
+                    this.objects[id] = obj;
+
+                    let self = this;
+
+                    let keys = Object.keys(obj);
+                    keys.forEach(key => {
+                        let value = obj[key];
+                        if (typeof value == "object") {
+                            if (value._type && value._type == "function") {
+                                obj[key] = function () {
+
+                                    console.log("Function " + key + " called on " + id);
+                                };
+                            }
+                            else {
+                                obj[key] = this.objects[value.id];
+                            }
+                        }
+
+                    });
+
+                    if (obj._type && obj._type === "array") {
+                        let arr: any[] = [];
+                        keys.forEach(key => {
+                            if (key !== "_type")
+                                arr[parseInt(key, 10)] = obj[key];
+                        });
+                        this.objects[cmd.id] = obj = arr;
+
+                    }
+
+                    if (cmd.id == 0) {
+                        this.root = obj;
+                        console.log("root");
+                        console.log(obj);
+                    }
+
+
+                } break;
+            case "set":
+                {
+                    let obj = this.objects[cmd.id];
+                    let value = cmd.data.newValue;
+                    if (typeof value == "object") {
+                        value = this.objects[value.id];
+                    }
+                    obj[cmd.data.property] = value;
+
+                    console.log("set");
+                    console.log(obj);
+                }
+        }
+    }
+
 }
 
 
@@ -217,12 +418,12 @@ function main() {
         app.use(errorHandler());
     }
 
-    log.info("Hello");
+
 
     var model: Thing[] = [];
     var t = new Thing("blue", 4, new Person("Javi", 37));
 
-    var om = new Ominscient(server);
+    var om = new Omniscient(server);
 
     om.on("new", (meta: IObjectMetadata) => {
 
@@ -236,13 +437,41 @@ function main() {
         console.log(`set ${meta.id}.${property} = '${value}'`);
     });
 
-    model[1] = t;
-    let p = om.getProxy(model);
+    model[0] = t;
+    om.root["model"] = model;
 
-    p[1].owner.age = 12;
+    let o = { color: "yellow" };
+    let p = om.getProxy(o);
+    let a = om.getProxy(p);
+
+    console.log(a === p);
+
+    console.log(om.getMetadata(o).id);
+    console.log(om.getMetadata(p).id);
+    console.log(om.getMetadata(a).id);
+
+    let proto = Object.getPrototypeOf(om);
+    console.log("proto=" + (om.constructor == Omniscient));
+
+    log.info("server.listen");
+    server.listen(4000);
 
 
+    var c = new Client("http://localhost:4000");
 
+
+    setTimeout(() => {
+        let root = om.getProxy(om.root);
+        root.model[0].color = { features: "green", taste: () => { console.log("hello"); } };
+        console.log(om.getAliveIds());
+    }, 2000);
+
+    setTimeout(() => {
+
+        c.root.model[0].color.taste();
+
+
+    }, 4000);
 
 }
 
