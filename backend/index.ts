@@ -58,7 +58,9 @@ class Thing {
     }
 
     public speak(greeting: string) {
-        console.log(`${greeting}, my color is ${this.color}`);
+        let g = `${greeting}, my color is ${this.color}`;
+        console.log(g);
+        return g;
     }
 
 
@@ -123,7 +125,7 @@ function main() {
     om.root["model"] = model;
 
 
-    om.registerType(Thing,"Thing");
+    om.registerType(Thing, "Thing");
     om.registerMethod(Thing, Thing.prototype.speak);
 
 
@@ -136,16 +138,19 @@ function main() {
 
     var c = new Client("http://localhost:4000");
 
-
+    /*
+        setTimeout(() => {
+            let root = om.getProxy(om.root);
+            root.model[0].color = { features: "green", taste: () => { console.log("hello"); } };
+            console.log(om.getAliveIds());
+        }, 2000);
+    
+    */
     setTimeout(() => {
-        let root = om.getProxy(om.root);
-        root.model[0].color = { features: "green", taste: () => { console.log("hello"); } };
-        console.log(om.getAliveIds());
-    }, 2000);
 
-    setTimeout(() => {
-
-        c.root.model[0].color.taste();
+        c.root.model[0].speak("perry").then((v:string) => {
+            console.log("Received " + v);
+        });
 
 
     }, 4000);

@@ -192,10 +192,14 @@ export class Client {
                 thisArg: thisArg,
                 args: a,
             }
-            this.socket.send(cmd);
+            this.send(cmd);
 
         });
 
+    }
+
+    private send(data: any) {
+        this.socket.send(JSON.stringify(data));
     }
 
 }

@@ -352,7 +352,8 @@ class Agent {
     }
 
     private serialize(obj: any) {
-        this.notifyNew(obj);
+        if (typeof obj == "object")
+            this.notifyNew(obj);
         return this.om.serialize(obj);
     }
 
@@ -376,7 +377,7 @@ class Agent {
                 message: "OK"
 
             }
-            this.socket.send(JSON.stringify(rcmd));
+            this.send(rcmd);
         }).catch(err => {
             let rcmd: IInvokeResultCommand = {
                 command: "result",
@@ -385,7 +386,7 @@ class Agent {
                 status: 1,
                 message: err
             }
-            this.socket.send(JSON.stringify(rcmd));
+            this.send(rcmd);
         })
     }
 
@@ -432,7 +433,7 @@ class Agent {
 
     private notifySet(obj: any, property: PropertyKey, newValue: any) {
         if (typeof newValue == "object") {
-            newValue = { id: this.om.getMetadata(newValue).id };
+            newValue = { _byref: this.om.getMetadata(newValue).id };
         }
         else {
             newValue = this.serialize(newValue);
