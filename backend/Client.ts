@@ -29,7 +29,7 @@ export class Client {
     public root: any;
     private objects = new Map<number, any>();
     private objecIds = new WeakMap<any, number>();
-    private types = new Map<string, ILocalTypeInfo>();
+    private typesByName = new Map<string, ILocalTypeInfo>();
     private calls = new Map<number, IPromiseInfo>();
 
 
@@ -44,6 +44,8 @@ export class Client {
             this.processMessage(JSON.parse(data));
         })
     }
+
+
 
     private getObject(obj: any | IByRef): any {
         if (typeof obj == "object" && obj != null && obj != undefined) {
@@ -95,7 +97,7 @@ export class Client {
                 obj = arr;
                 this.objects.set(id, arr);
             } else {
-                let typeInfo = this.types.get(type);
+                let typeInfo = this.typesByName.get(type);
                 if (!typeInfo) {
                     log.error(`Unknown type ${type}`);
                     return;
@@ -143,7 +145,7 @@ export class Client {
 
         typeInfo.prototype = Proto as any;
 
-        this.types.set(typeInfo.name, typeInfo);
+        this.typesByName.set(typeInfo.name, typeInfo);
     }
 
     private process_result(cmd: IInvokeResultCommand) {

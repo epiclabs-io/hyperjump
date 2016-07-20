@@ -33,7 +33,7 @@ export class Omniscient extends events.EventEmitter {
     private proxies: WeakMap<any, any>;
     private functions = new Map<number, Function>();
     private types: WeakMap<Function, ITypeInfo>;
-    public typeNames: Map<string, ITypeInfo>;
+    public typesByName: Map<string, ITypeInfo>;
     private objectIds: Map<number, any>;
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
@@ -48,7 +48,7 @@ export class Omniscient extends events.EventEmitter {
         let agentId = 0;
         this.root_ = {};
         this.types = new WeakMap<any, ITypeInfo>();
-        this.typeNames = new Map<string, ITypeInfo>();
+        this.typesByName = new Map<string, ITypeInfo>();
         this.objectIds = new Map<number, any>();
 
         wss.on("connection", (socket) => {
@@ -56,11 +56,11 @@ export class Omniscient extends events.EventEmitter {
             this.agents.set(agent.id, agent);
 
             socket.on("error", (err) => {
-                this.clean(agent);
+                this.removeAgent(agent);
             });
 
             socket.on("close", (code, message) => {
-                this.clean(agent);
+                this.removeAgent(agent);
             });
 
             this.emit("connection", agent);
@@ -72,10 +72,13 @@ export class Omniscient extends events.EventEmitter {
         this.scheduleGC();
     }
 
-    private clean(agent: Agent) {
+    private removeAgent(agent: Agent) {
         this.agents.delete(agent.id);
     }
 
+    private isRegisteredType(obj: any): boolean {
+        return obj != null && this.types.has(obj.constructor);
+    }
 
     private proxyHandler = {
         get: (target: any, property: PropertyKey) => {
@@ -152,7 +155,7 @@ export class Omniscient extends events.EventEmitter {
 
         }
         this.types.set(type, typeInfo);
-        this.typeNames.set(typeInfo.name, typeInfo);
+        this.typesByName.set(typeInfo.name, typeInfo);
         this.emit("newType", typeInfo);
         return typeInfo;
     }
@@ -430,7 +433,7 @@ class Agent {
     }
 
     private syncTypes() {
-        for (let value of this.om.typeNames.values()) {
+        for (let value of this.om.typesByName.values()) {
             this.notifyNewType(value);
         }
     }
