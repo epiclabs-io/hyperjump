@@ -25,6 +25,8 @@ export interface IByRef {
     _byref: number
 }
 
+const GC_TIMER = 60 * 1000;
+
 export class Omniscient extends events.EventEmitter {
 
     private objects: WeakMap<any, IObjectMetadata>;
@@ -51,6 +53,7 @@ export class Omniscient extends events.EventEmitter {
 
         wss.on("connection", (socket) => {
             let agent = new Agent(this, socket, agentId++);
+            this.agents.set(agent.id, agent);
 
             socket.on("error", (err) => {
                 this.clean(agent);
@@ -66,6 +69,7 @@ export class Omniscient extends events.EventEmitter {
 
         this.objects = new WeakMap<Object, IObjectMetadata>();
         this.getProxy(this.root_);
+        this.scheduleGC();
     }
 
     private clean(agent: Agent) {
@@ -84,7 +88,7 @@ export class Omniscient extends events.EventEmitter {
         },
         set: (target: any, property: PropertyKey, value: any, receiver: any): boolean => {
 
-            if (typeof value == "object") {
+            if (typeof value == "object" && value != null && value != undefined) {
                 let original = this.proxies.get(value);
                 if (original)
                     value = original;
@@ -178,6 +182,17 @@ export class Omniscient extends events.EventEmitter {
             return { _byref: id };
     }
 
+    private scheduleGC() {
+        this.gc();
+        let aliveIds = this.getAliveIds();
+        this.agents.forEach((agent) => {
+            agent.alive(aliveIds);
+        });
+        setTimeout(() => {
+            this.scheduleGC();
+        }, GC_TIMER);
+    }
+
     public serialize(obj: any): any {
 
         if (typeof obj !== "object")
@@ -199,10 +214,8 @@ export class Omniscient extends events.EventEmitter {
         keys.forEach(key => {
             let value = obj[key];
 
-            if (typeof value == "object") {
+            if (typeof value == "object" && value != null && value != undefined) {
                 ret[key] = this.getRef(value);
-            } else if (typeof value == "function") {
-                ret[key] = { "_type": "function" };
             } else {
                 ret[key] = value;
             }
@@ -213,8 +226,8 @@ export class Omniscient extends events.EventEmitter {
 
     }
 
-    public getAliveIds(): string[] {
-        return Object.keys(this.objectIds);
+    public getAliveIds(): number[] {
+        return [...this.objectIds.keys()];
     }
 
     public gc(obj: any = null) {
@@ -228,14 +241,17 @@ export class Omniscient extends events.EventEmitter {
         if (this.objectIds.has(id))
             return;
 
+        this.objectIds.set(id, obj);
+
         let keys = Object.keys(obj);
         keys.forEach((key) => {
             let value = obj[key];
-            if (typeof value == "object") {
+            if (typeof value == "object" && value != null && value != undefined) {
                 this.gc(value);
             }
         });
     }
+
 
     public checkByRef(obj: any | IByRef): any {
 
@@ -324,6 +340,10 @@ export interface INewTypeCommand extends ICommand {
     typeInfo: ITypeInfo
 }
 
+export interface IKeepAliveCommand extends ICommand {
+    aliveIds: number[]
+}
+
 class Agent {
 
     private om: Omniscient;
@@ -400,7 +420,7 @@ class Agent {
         let keys = Object.keys(obj);
         keys.forEach(key => {
             let value = obj[key];
-            if (typeof value == "object") {
+            if (typeof value == "object" && value != null && value != undefined) {
                 this.syncObject(value);
             }
 
@@ -453,6 +473,13 @@ class Agent {
             command: "newType",
             typeInfo: typeInfo
         } as INewTypeCommand);
+    }
+
+    public alive(aliveIds: number[]) {
+        this.send({
+            command: "alive",
+            aliveIds
+        } as IKeepAliveCommand);
     }
 
 }

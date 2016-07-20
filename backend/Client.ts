@@ -6,6 +6,7 @@ import {IInvokeResultCommand} from "./Omniscient";
 import {INewObjectCommand} from "./Omniscient";
 import {ISetPropertyCommand} from "./Omniscient";
 import {INewTypeCommand} from "./Omniscient";
+import {IKeepAliveCommand} from "./Omniscient";
 import {IByRef} from "./Omniscient";
 
 import * as loglevel from "loglevel";
@@ -44,6 +45,20 @@ export class Client {
         })
     }
 
+    private getObject(obj: any | IByRef): any {
+        if (typeof obj == "object" && obj != null && obj != undefined) {
+            let id = (obj as IByRef)._byref;
+            if (id == undefined) {
+                log.warn("id undefined");
+            }
+            obj = this.objects.get(id);
+            if (obj == undefined) {
+                log.error(`Unknown Object id ${id}`);
+            }
+        }
+        return obj;
+    }
+
     private processMessage(cmd: ICommand) {
         console.log(cmd);
         switch (cmd.command) {
@@ -51,6 +66,7 @@ export class Client {
             case "set": this.process_set(cmd as ISetPropertyCommand); break;
             case "newType": this.process_newType(cmd as INewTypeCommand); break;
             case "result": this.process_result(cmd as IInvokeResultCommand); break;
+            case "alive": this.process_alive(cmd as IKeepAliveCommand);break;
             default: {
                 log.warn("Unknown cmd type " + cmd.command);
             }
@@ -107,20 +123,6 @@ export class Client {
         }
     }
 
-    private getObject(obj: any | IByRef): any {
-        if (typeof obj == "object") {
-            let id = (obj as IByRef)._byref;
-            if (id == undefined) {
-                log.warn("id undefined");
-            }
-            obj = this.objects.get(id);
-            if (obj == undefined) {
-                log.error(`Unknown Object id ${id}`);
-            }
-        }
-        return obj;
-    }
-
     private process_set(cmd: ISetPropertyCommand) {
         let obj = this.objects.get(cmd.objectId);
         let value = this.getObject(cmd.value);
@@ -158,6 +160,16 @@ export class Client {
             promiseInfo.resolve(this.getObject(cmd.result));
         } else
             promiseInfo.reject(cmd.message);
+    }
+
+    private process_alive(cmd: IKeepAliveCommand) {
+        let objects = this.objects;
+        this.objects = new Map<number, any>();
+        cmd.aliveIds.forEach(id => {
+            let obj = objects.get(id);
+            if (obj)
+                this.objects.set(id, obj);
+        });
     }
 
     private generateProxyFunction(id: number) {

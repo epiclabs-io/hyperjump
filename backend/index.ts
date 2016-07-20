@@ -127,6 +127,7 @@ function main() {
 
     om.registerType(Thing, "Thing");
     om.registerMethod(Thing, Thing.prototype.speak);
+    om.registerType(Person);
 
 
     let proto = Object.getPrototypeOf(om);
@@ -138,6 +139,8 @@ function main() {
 
     var c = new Client("http://localhost:4000");
 
+
+
     /*
         setTimeout(() => {
             let root = om.getProxy(om.root);
@@ -148,12 +151,19 @@ function main() {
     */
     setTimeout(() => {
 
-        c.root.model[0].speak("perry").then((v:string) => {
+        c.root.model[0].speak("perry").then((v: string) => {
             console.log("Received " + v);
         });
 
 
     }, 4000);
+
+    setTimeout(() => {
+        console.log("delete object");
+        om.root.model[0] = null;
+
+
+    }, 14000);
 
 }
 
