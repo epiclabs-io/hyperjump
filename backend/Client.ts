@@ -7,6 +7,7 @@ import {INewObjectCommand} from "./Omniscient";
 import {ISetPropertyCommand} from "./Omniscient";
 import {INewTypeCommand} from "./Omniscient";
 import {IKeepAliveCommand} from "./Omniscient";
+import {IDeleteCommand} from "./Omniscient";
 import {IByRef} from "./Omniscient";
 
 import * as loglevel from "loglevel";
@@ -172,6 +173,12 @@ export class Client {
             if (obj)
                 this.objects.set(id, obj);
         });
+    }
+
+    private process_delete(cmd:IDeleteCommand){
+        let obj = this.getObject(cmd.objectId);
+
+        delete obj[cmd.property];
     }
 
     private generateProxyFunction(id: number) {

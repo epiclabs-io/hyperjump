@@ -100,6 +100,12 @@ export class Omniscient extends events.EventEmitter {
             target[property] = value;
             this.emit("set", target, property, value);
             return true;
+        }, 
+
+        deleteProperty:(target:any, property:PropertyKey):boolean=>{
+            delete target[property];
+            this.emit("delete", target, property);
+            return true;
         }
     };
 
@@ -347,6 +353,11 @@ export interface IKeepAliveCommand extends ICommand {
     aliveIds: number[]
 }
 
+export interface IDeleteCommand extends ICommand {
+    objectId:number,
+    property:string
+}
+
 class Agent {
 
     private om: Omniscient;
@@ -367,6 +378,10 @@ class Agent {
 
         om.on("set", (target: any, property: PropertyKey, value: any) => {
             this.notifySet(target, property, value);
+        });
+
+        om.on("delete", (target:any, property:PropertyKey)=>{
+            this.notifyDelete(target,property);
         });
 
         this.socket.on("message", (data, flags) => {
@@ -455,7 +470,7 @@ class Agent {
     }
 
     private notifySet(obj: any, property: PropertyKey, newValue: any) {
-        if (typeof newValue == "object") {
+        if (typeof newValue == "object" && newValue!=null && newValue != undefined ) {
             newValue = { _byref: this.om.getMetadata(newValue).id };
         }
         else {
@@ -476,6 +491,14 @@ class Agent {
             command: "newType",
             typeInfo: typeInfo
         } as INewTypeCommand);
+    }
+
+    private notifyDelete(target:any, property:PropertyKey){
+        this.send({
+            command: "delete",
+            objectId:this.om.getMetadata(target).id,
+            property:property
+        })
     }
 
     public alive(aliveIds: number[]) {
