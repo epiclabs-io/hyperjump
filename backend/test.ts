@@ -80,10 +80,6 @@ class Handler implements ProxyHandler<Thing>{
 
 }
 
-
-
-
-
 function main() {
 
     let app = express();
@@ -142,7 +138,7 @@ function main() {
 
     var c = new om.SyncClient(new WebSocket("http://localhost:3000/modelsync"));
 
-    c.on("sync",() =>{
+    c.on("sync", () => {
         console.log("--------------ROOT-----------");
         console.log(JSON.stringify(c.root, null, "\t"));
     });
