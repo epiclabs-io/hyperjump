@@ -1,13 +1,11 @@
-/// <reference path="../typings/tsd.d.ts" />
-
 import "./utils/loglevelInit";
-
 import * as loglevel from "loglevel";
 import * as events from "events";
 import * as WebSocket from "ws";
 import * as http from "http";
+import * as Protocol from "./Protocol";
 
-var log = loglevel.getLogger("OMNISCIENT");
+var log = loglevel.getLogger("modelsync-server");
 
 export interface IObjectMetadata {
     proxy: any,
@@ -15,40 +13,35 @@ export interface IObjectMetadata {
     id: number
 }
 
-export interface ITypeInfo {
-    name: string,
-    methods: { [methodName: string]: number }
-}
 
-export interface IByRef {
-    _construct?: ITypeInfo,
-    _byref: number
-}
+class RootObject { };
 
 const GC_TIMER = 60 * 1000;
 
-export class Omniscient extends events.EventEmitter {
+
+
+export class SyncServer extends events.EventEmitter {
 
     private objects: WeakMap<any, IObjectMetadata>;
     private proxies: WeakMap<any, any>;
     private functions = new Map<number, Function>();
-    private types: WeakMap<Function, ITypeInfo>;
-    public typesByName: Map<string, ITypeInfo>;
+    private types: WeakMap<Function, Protocol.ITypeInfo>;
+    public typesByName: Map<string, Protocol.ITypeInfo>;
     private objectIds: Map<number, any>;
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
 
-    private root_: any;
+    private root_: RootObject;
 
-    constructor(server: http.Server) {
+    constructor(server: http.Server, path: string) {
         super();
         this.agents = new Map<number, Agent>();
         this.proxies = new WeakMap<any, any>();
-        let wss = new WebSocket.Server({ server: server });
+        let wss = new WebSocket.Server({ server: server, path: path });
         let agentId = 0;
-        this.root_ = {};
-        this.types = new WeakMap<any, ITypeInfo>();
-        this.typesByName = new Map<string, ITypeInfo>();
+        this.root_ = new RootObject;
+        this.types = new WeakMap<any, Protocol.ITypeInfo>();
+        this.typesByName = new Map<string, Protocol.ITypeInfo>();
         this.objectIds = new Map<number, any>();
 
         wss.on("connection", (socket) => {
@@ -66,18 +59,25 @@ export class Omniscient extends events.EventEmitter {
             this.emit("connection", agent);
         });
 
+        wss.on("error", (error) => {
+            this.emit("error", error);
+        });
+
 
         this.objects = new WeakMap<Object, IObjectMetadata>();
+        this.registerType(Array, "Array");
+        this.registerType(RootObject, "Root");
         this.getProxy(this.root_);
         this.scheduleGC();
     }
 
     private removeAgent(agent: Agent) {
+        agent.terminate();
         this.agents.delete(agent.id);
     }
 
-    private isRegisteredType(obj: any): boolean {
-        return obj != null && this.types.has(obj.constructor);
+    public isRegisteredType(obj: any): boolean {
+        return obj != null && obj != undefined && this.types.has(obj.constructor);
     }
 
     private proxyHandler = {
@@ -100,9 +100,9 @@ export class Omniscient extends events.EventEmitter {
             target[property] = value;
             this.emit("set", target, property, value);
             return true;
-        }, 
+        },
 
-        deleteProperty:(target:any, property:PropertyKey):boolean=>{
+        deleteProperty: (target: any, property: PropertyKey): boolean => {
             delete target[property];
             this.emit("delete", target, property);
             return true;
@@ -120,8 +120,8 @@ export class Omniscient extends events.EventEmitter {
     }
     public getMetadata<T>(obj: T): IObjectMetadata {
 
-        if (typeof obj != "object") {
-            throw new Error("can't get a proxy from a non-object");
+        if (!this.isRegisteredType(obj)) {
+            throw new Error("can't get a proxy from a non-object or unregistered type");
         }
         //check if a proxy was passed instead of an original object.
         let original = this.proxies.get(obj);
@@ -150,7 +150,7 @@ export class Omniscient extends events.EventEmitter {
         return metadata;
     }
 
-    public registerType(type: Function, name?: string): ITypeInfo {
+    public registerType(type: Function, name?: string): Protocol.ITypeInfo {
         let typeInfo = this.types.get(type);
         if (typeInfo)
             throw new Error(`Type ${typeInfo.name} already registered`);
@@ -182,7 +182,7 @@ export class Omniscient extends events.EventEmitter {
 
     }
 
-    private getRef(obj: any): IByRef {
+    private getRef(obj: any): Protocol.IByRef {
         let id = this.getMetadata(obj).id;
         let construct = this.types.get(obj.constructor);
         if (construct)
@@ -204,7 +204,7 @@ export class Omniscient extends events.EventEmitter {
 
     public serialize(obj: any): any {
 
-        if (typeof obj !== "object")
+        if (!this.isRegisteredType(obj))
             return obj;
 
         let ret = {};
@@ -223,7 +223,7 @@ export class Omniscient extends events.EventEmitter {
         keys.forEach(key => {
             let value = obj[key];
 
-            if (typeof value == "object" && value != null && value != undefined) {
+            if (this.isRegisteredType(value)) {
                 ret[key] = this.getRef(value);
             } else {
                 ret[key] = value;
@@ -255,14 +255,14 @@ export class Omniscient extends events.EventEmitter {
         let keys = Object.keys(obj);
         keys.forEach((key) => {
             let value = obj[key];
-            if (typeof value == "object" && value != null && value != undefined) {
+            if (this.isRegisteredType(value)) {
                 this.gc(value);
             }
         });
     }
 
 
-    public checkByRef(obj: any | IByRef): any {
+    public checkByRef(obj: any | Protocol.IByRef): any {
 
         if (obj._byref != undefined) {
             let ret = this.objectIds.get(obj._byref);
@@ -315,109 +315,82 @@ export class Omniscient extends events.EventEmitter {
     }
 }
 
-export interface ICommand {
-    command: string,
-}
-
-export interface INewObjectCommand extends ICommand {
-    newObj: any,
-    objectId: number
-}
-
-export interface IInvokeCommand extends ICommand {
-    functionId: number,
-    callId: number,
-    thisArg: number,
-    args: any[]
-
-}
-
-export interface IInvokeResultCommand extends ICommand {
-    callId: number,
-    result: any,
-    status: number,
-    message?: string
-}
-
-export interface ISetPropertyCommand extends ICommand {
-    objectId: number,
-    property: string,
-    value: any
-}
-
-export interface INewTypeCommand extends ICommand {
-    typeInfo: ITypeInfo
-}
-
-export interface IKeepAliveCommand extends ICommand {
-    aliveIds: number[]
-}
-
-export interface IDeleteCommand extends ICommand {
-    objectId:number,
-    property:string
-}
 
 class Agent {
 
-    private om: Omniscient;
+    private om: SyncServer;
     private socket: WebSocket;
     private sentObjects = new WeakSet();
     public id: number;
 
-    constructor(om: Omniscient, socket: WebSocket, id: number) {
+    private om_new: Function;
+    private om_set: Function;
+    private om_newType: Function;
+    private om_delete: Function;
+    private socket_message: Function;
+
+    constructor(om: SyncServer, socket: WebSocket, id: number) {
         this.om = om;
         this.socket = socket;
         this.id = id;
         this.initialSync();
 
-        om.on("new", (meta: IObjectMetadata) => {
+        om.on("new", this.om_new = (meta: IObjectMetadata) => {
             this.notifyNew(meta.originalObject);
-
         });
 
-        om.on("set", (target: any, property: PropertyKey, value: any) => {
+        om.on("set", this.om_set = (target: any, property: PropertyKey, value: any) => {
             this.notifySet(target, property, value);
         });
 
-        om.on("delete", (target:any, property:PropertyKey)=>{
-            this.notifyDelete(target,property);
+        om.on("newType", this.om_newType = (typeInfo: Protocol.ITypeInfo) => {
+            this.notifyNewType(typeInfo);
+        })
+
+        om.on("delete", this.om_delete = (target: any, property: PropertyKey) => {
+            this.notifyDelete(target, property);
         });
 
-        this.socket.on("message", (data, flags) => {
+        this.socket.on("message", this.socket_message = (data:any, flags:any) => {
             this.processMessage(JSON.parse(data));
         })
     }
 
+    public terminate() {
+        this.om.removeListener("new",this.om_new);
+        this.om.removeListener("set",this.om_set);
+        this.om.removeListener("newType",this.om_newType);
+        this.om.removeListener("delete",this.om_delete);
+        this.socket.removeListener("message",this.socket_message);
+    }
+
     private serialize(obj: any) {
-        if (typeof obj == "object")
-            this.notifyNew(obj);
+        this.notifyNew(obj);
         return this.om.serialize(obj);
     }
 
-    private processMessage(cmd: ICommand) {
+    private processMessage(cmd: Protocol.ICommand) {
         console.log(cmd);
         switch (cmd.command) {
-            case "invoke": this.process_invoke(cmd as IInvokeCommand); break;
+            case "invoke": this.process_invoke(cmd as Protocol.IInvokeCommand); break;
             default: {
                 log.warn("Unknown cmd type " + cmd.command);
             }
         }
     }
 
-    private process_invoke(cmd: IInvokeCommand) {
+    private process_invoke(cmd: Protocol.IInvokeCommand) {
         this.om.invokeFunction(cmd.functionId, cmd.thisArg, cmd.args).then(retVal => {
-            let rcmd: IInvokeResultCommand = {
+            let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,
                 result: this.serialize(retVal),
                 status: 0,
                 message: "OK"
-
             }
             this.send(rcmd);
         }).catch(err => {
-            let rcmd: IInvokeResultCommand = {
+            let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,
                 result: null,
@@ -458,7 +431,7 @@ class Agent {
     }
 
     private notifyNew(obj: any) {
-        if (this.sentObjects.has(obj))
+        if (!this.om.isRegisteredType(obj) || this.sentObjects.has(obj))
             return;
 
         this.sentObjects.add(obj);
@@ -466,11 +439,11 @@ class Agent {
             command: "new",
             objectId: this.om.getMetadata(obj).id,
             newObj: this.serialize(obj)
-        } as INewObjectCommand);
+        } as Protocol.INewObjectCommand);
     }
 
     private notifySet(obj: any, property: PropertyKey, newValue: any) {
-        if (typeof newValue == "object" && newValue!=null && newValue != undefined ) {
+        if (typeof newValue == "object" && newValue != null && newValue != undefined) {
             newValue = { _byref: this.om.getMetadata(newValue).id };
         }
         else {
@@ -482,22 +455,22 @@ class Agent {
             property: property,
             value: newValue
 
-        } as ISetPropertyCommand)
+        } as Protocol.ISetPropertyCommand)
     }
 
-    private notifyNewType(typeInfo: ITypeInfo) {
+    private notifyNewType(typeInfo: Protocol.ITypeInfo) {
 
         this.send({
             command: "newType",
             typeInfo: typeInfo
-        } as INewTypeCommand);
+        } as Protocol.INewTypeCommand);
     }
 
-    private notifyDelete(target:any, property:PropertyKey){
+    private notifyDelete(target: any, property: PropertyKey) {
         this.send({
             command: "delete",
-            objectId:this.om.getMetadata(target).id,
-            property:property
+            objectId: this.om.getMetadata(target).id,
+            property: property
         })
     }
 
@@ -505,7 +478,7 @@ class Agent {
         this.send({
             command: "alive",
             aliveIds
-        } as IKeepAliveCommand);
+        } as Protocol.IKeepAliveCommand);
     }
 
 }
