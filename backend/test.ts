@@ -66,19 +66,6 @@ class Thing {
 }
 
 
-class Handler implements ProxyHandler<Thing>{
-
-    private target: Thing;
-    constructor(target: Thing) {
-        this.target = target;
-    }
-    public get(i: Thing, name: string) {
-        console.log(this);
-        console.log(i, name);
-        return i[name];
-    }
-
-}
 
 function main() {
 
@@ -103,55 +90,31 @@ function main() {
 
     var omServer = new om.SyncServer(httpServer, "/test");
 
-    omServer.on("new", (meta: any) => {
-
-        let st = JSON.stringify(omServer.serialize(meta.originalObject));
-        console.log(`New object with id ${meta.id}`);
-        console.log(st);
-    });
-
-    omServer.on("set", (target: any, property: PropertyKey, value: any) => {
-        var meta = omServer.getMetadata(target);
-        console.log(`set ${meta.id}.${property} = '${value}'`);
-    });
-
     omServer.on("error", (error: string) => {
         log.error("server Error: " + error);
-    })
+    });
 
+    omServer.registerType(Thing, "Thing");
+    omServer.registerMethod(Thing, "speak");
+    omServer.root.t = t;
 
-        ; omServer.registerType(Thing, "Thing");
-    omServer.registerMethod(Thing, Thing.prototype.speak);
-    //om.registerType(Person);
-
-    model[0] = t;
-    omServer.root["model"] = model;
-
-
-
-    let proto = Object.getPrototypeOf(om);
-    console.log("proto=" + (om.constructor == om.SyncServer));
+    omServer.registerMethodEx(omServer.constructor, function (a: number, b: number) {
+        return a + b;
+    }, "sum");
 
     log.info("server.listen");
     httpServer.listen(4000);
 
 
-    var c = new om.SyncClient(new WebSocket("http://localhost:3000/modelsync"));
+    var c = new om.SyncClient(new WebSocket("http://localhost:4000/test"));
 
-    c.on("sync", () => {
-        console.log("--------------ROOT-----------");
-        console.log(JSON.stringify(c.root, null, "\t"));
+    c.on("root", async () => {
+        console.log("Root!");
+
+    let ret = await c.root.t.speak("perry");
+    console.log(ret);
     });
 
-
-    /*
-        setTimeout(() => {
-            let root = om.getProxy(om.root);
-            root.model[0].color = { features: "green", taste: () => { console.log("hello"); } };
-            console.log(om.getAliveIds());
-        }, 2000);
-    
-    */
     setTimeout(() => {
 
 

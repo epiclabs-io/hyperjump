@@ -1,13 +1,19 @@
 
 
+export interface IFunctionDefinition{
+    args:string[];
+    body:string;
+}
+
 export interface ITypeInfo {
     name: string,
-    methods: { [methodName: string]: number }
+    methods: { [methodName: string]: number },
+    clientMethods:{ [methodName: string]: IFunctionDefinition };
 }
 
 export interface IByRef {
     _construct?: ITypeInfo,
-    _byref: number
+    _byRef: number
 }
 
 export interface ICommand {
@@ -22,7 +28,7 @@ export interface INewObjectCommand extends ICommand {
 export interface IInvokeCommand extends ICommand {
     functionId: number,
     callId: number,
-    thisArg: number,
+    thisArg: any,
     args: any[]
 
 }

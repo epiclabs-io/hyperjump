@@ -1,45 +1,48 @@
-import "./utils/loglevelInit";
 import * as loglevel from "loglevel";
 import * as events from "events";
 import * as WebSocket from "ws";
 import * as http from "http";
 import * as Protocol from "./Protocol";
 
+const parseFunction = require("parse-function");
+
 var log = loglevel.getLogger("modelsync-server");
 
 export interface IObjectMetadata {
-    proxy: any,
-    originalObject: any,
-    id: number
+    id: number,
+    lastPing: number
 }
 
+function createRootClass(server: SyncServer): { new (): any } {
 
-class RootObject { };
+    class Root {
 
-const GC_TIMER = 60 * 1000;
-
-
+        public getType(typeName: string): Protocol.ITypeInfo {
+            return server.getType(typeName);
+        }
+        public getObject(id: number) {
+            return server.getObject(id);
+        }
+    }
+    return Root;
+}
 
 export class SyncServer extends events.EventEmitter {
 
     private objects: WeakMap<any, IObjectMetadata>;
-    private proxies: WeakMap<any, any>;
     private functions = new Map<number, Function>();
     private types: WeakMap<Function, Protocol.ITypeInfo>;
     public typesByName: Map<string, Protocol.ITypeInfo>;
     private objectIds: Map<number, any>;
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
-
-    private root_: RootObject;
+    private root_: any;
 
     constructor(server: http.Server, path: string) {
         super();
         this.agents = new Map<number, Agent>();
-        this.proxies = new WeakMap<any, any>();
         let wss = new WebSocket.Server({ server: server, path: path });
         let agentId = 0;
-        this.root_ = new RootObject;
         this.types = new WeakMap<any, Protocol.ITypeInfo>();
         this.typesByName = new Map<string, Protocol.ITypeInfo>();
         this.objectIds = new Map<number, any>();
@@ -65,10 +68,26 @@ export class SyncServer extends events.EventEmitter {
 
 
         this.objects = new WeakMap<Object, IObjectMetadata>();
-        this.registerType(Array, "Array");
-        this.registerType(RootObject, "Root");
-        this.getProxy(this.root_);
-        this.scheduleGC();
+ 
+        let Root = createRootClass(this);
+        this.root_ = new Root();
+ 
+        this.registerType(Root, "Root");
+        this.getMetadata(this.root_).lastPing = -1;//id 0, keep forever
+        this.registerMethod(Root, "getType"); // func 1.
+        this.registerMethod(Root, "getObject"); // func 2.
+    }
+
+    public get root():any{
+        return this.root_;
+    }
+
+    public getType(typeName: string): Protocol.ITypeInfo {
+        return this.typesByName.get(typeName);
+    }
+
+    public getObject(id: number) {
+        return this.objectIds.get(id);
     }
 
     private removeAgent(agent: Agent) {
@@ -76,76 +95,29 @@ export class SyncServer extends events.EventEmitter {
         this.agents.delete(agent.id);
     }
 
-    public isRegisteredType(obj: any): boolean {
-        return obj != null && obj != undefined && this.types.has(obj.constructor);
+    public getTypeInfo(obj: any): Protocol.ITypeInfo {
+        if (obj == null || obj == undefined)
+            return null;
+        else
+            return this.types.get(obj.constructor);
     }
 
-    private proxyHandler = {
-        get: (target: any, property: PropertyKey) => {
-            let value = target[property];
-            if (typeof value == "object") {
-                return this.getProxy(value);
-            }
-            else
-                return value;
-        },
-        set: (target: any, property: PropertyKey, value: any, receiver: any): boolean => {
+    public getMetadata(obj: any): IObjectMetadata {
 
-            if (typeof value == "object" && value != null && value != undefined) {
-                let original = this.proxies.get(value);
-                if (original)
-                    value = original;
-            }
-
-            target[property] = value;
-            this.emit("set", target, property, value);
-            return true;
-        },
-
-        deleteProperty: (target: any, property: PropertyKey): boolean => {
-            delete target[property];
-            this.emit("delete", target, property);
-            return true;
-        }
-    };
-
-
-    public get root(): any {
-        return this.root_;
-    }
-
-    public getProxy<T>(obj: T): T {
-
-        return this.getMetadata(obj).proxy;
-    }
-    public getMetadata<T>(obj: T): IObjectMetadata {
-
-        if (!this.isRegisteredType(obj)) {
-            throw new Error("can't get a proxy from a non-object or unregistered type");
-        }
-        //check if a proxy was passed instead of an original object.
-        let original = this.proxies.get(obj);
-        if (original) {
-            obj = original as T;
+        if (!this.getTypeInfo(obj)) {
+            throw new Error("can't get metadata from a non-object or unregistered type");
         }
 
-        let self = this;
         let metadata = this.objects.get(obj);
         if (metadata)
             return metadata;
 
-        let pr = new Proxy(obj, this.proxyHandler);
-        this.proxies.set(pr, obj);
-
         metadata = {
-            proxy: pr,
-            originalObject: obj,
-            id: this.objectCounter++
+            id: this.objectCounter++,
+            lastPing: (new Date()).getTime()
         }
         this.objects.set(obj, metadata);
         this.objectIds.set(metadata.id, obj);
-        this.emit("new", metadata);
-
 
         return metadata;
     }
@@ -157,16 +129,17 @@ export class SyncServer extends events.EventEmitter {
 
         typeInfo = {
             name: name || type.name,
-            methods: {}
+            methods: {},
+            clientMethods: {}
 
         }
         this.types.set(type, typeInfo);
         this.typesByName.set(typeInfo.name, typeInfo);
-        this.emit("newType", typeInfo);
         return typeInfo;
     }
 
-    public registerMethod(type: Function, func: Function, name?: string) {
+
+    public registerMethodEx(type: Function, func: Function, name?: string) {
         let typeInfo = this.types.get(type);
         if (!typeInfo) {
             typeInfo = this.registerType(type);
@@ -174,106 +147,129 @@ export class SyncServer extends events.EventEmitter {
         typeInfo.methods[name || func.name] = this.registerFunction(func);
     }
 
+    public registerMethod(type: Function, name: string) {
+        this.registerMethodEx(type, type.prototype[name], name);
+    }
+
+    public registerClientMethodEx(type: Function, func: Function | string, name: string) {
+        let parsed = parseFunction(func);
+        let clientMethodInfo: Protocol.IFunctionDefinition = {
+            args: parsed.args,
+            body: parsed.body
+        }
+        let typeInfo = this.types.get(type);
+        if (!typeInfo) {
+            typeInfo = this.registerType(type);
+        }
+        typeInfo.clientMethods[name] = clientMethodInfo;
+    }
+
+    public registerClientMethod(type: Function, name: string) {
+        this.registerClientMethodEx(type, type.prototype[name], name);
+    }
+
     public registerFunction(func: Function): number {
         let id = this.objectCounter++;
         this.functions.set(id, func);
 
         return id;
-
     }
 
-    private getRef(obj: any): Protocol.IByRef {
-        let id = this.getMetadata(obj).id;
-        let construct = this.types.get(obj.constructor);
-        if (construct)
-            return { _byref: id, _construct: construct };
-        else
-            return { _byref: id };
-    }
-
-    private scheduleGC() {
-        this.gc();
-        let aliveIds = this.getAliveIds();
-        this.agents.forEach((agent) => {
-            agent.alive(aliveIds);
-        });
-        setTimeout(() => {
-            this.scheduleGC();
-        }, GC_TIMER);
+    public createGenericType(name: string): { new (): any } {
+        let type = function () { };
+        this.registerType(type, name);
+        return type as any;
     }
 
     public serialize(obj: any): any {
 
-        if (!this.isRegisteredType(obj))
-            return obj;
-
-        let ret = {};
-
         if (Array.isArray(obj)) {
-            ret["_type"] = "array";
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.serialize(element));
+            });
+            return arr;
+        }
 
-        }
-        else {
-            let type = this.types.get(obj.constructor);
-            if (type)
-                ret["_type"] = type.name;
-        }
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        let type = this.getTypeInfo(obj);
+
+        let ret: any = {};
 
         let keys = Object.keys(obj);
         keys.forEach(key => {
-            let value = obj[key];
+            ret[key] = this.serialize(obj[key]);
+        });
 
-            if (this.isRegisteredType(value)) {
-                ret[key] = this.getRef(value);
-            } else {
-                ret[key] = value;
-            }
+        if (type) {
+            ret._type = type.name;
+            ret._byRef = this.getMetadata(obj).id;
+        }
 
+        return ret;
+
+    }
+
+    public deserialize(obj: any): any {
+
+        if (Array.isArray(obj)) {
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.deserialize(element));
+            });
+            return arr;
+        }
+
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        if ((obj as Protocol.IByRef)._byRef !== undefined) {
+            return this.getObjectByRef(obj);
+        }
+
+        let ret: any = {};
+
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            ret[key] = this.deserialize(obj[key]);
         });
 
         return ret;
 
     }
 
-    public getAliveIds(): number[] {
-        return [...this.objectIds.keys()];
+    public getObjectById(id: number): any {
+        let obj = this.objectIds.get(id);
+        if (!obj)
+            return null;
+
+        this.pingObj(obj);
+        return obj;
+
     }
 
-    public gc(obj: any = null) {
-
-        if (obj == null) {
-            obj = this.root;
-            this.objectIds.clear();
-        }
-
-        let id = this.getMetadata(obj).id;
-        if (this.objectIds.has(id))
-            return;
-
-        this.objectIds.set(id, obj);
-
-        let keys = Object.keys(obj);
-        keys.forEach((key) => {
-            let value = obj[key];
-            if (this.isRegisteredType(value)) {
-                this.gc(value);
-            }
-        });
+    public pingObj(obj: any) {
+        //try {
+        this.getMetadata(obj).lastPing = (new Date()).getTime();
+        //} catch (e) { }
     }
 
+    public getObjectByRef(obj: any | Protocol.IByRef): any {
 
-    public checkByRef(obj: any | Protocol.IByRef): any {
-
-        if (obj._byref != undefined) {
-            let ret = this.objectIds.get(obj._byref);
+        if (obj._byRef != undefined) {
+            let ret = this.getObjectById(obj._byRef);
             if (!ret)
-                throw new Error(`Unknown reference to object with id ${obj._byref}`);
+                throw new Error(`Unknown reference to object with id ${obj._byRef}`);
             return ret;
         }
+
         return obj;
     }
 
-    public invokeFunction(id: number, thisArg: number, args: any[]) {
+
+    public invokeFunction(id: number, thisArg: any, args: any[]) {
         return new Promise<any>((resolve, reject) => {
             let func = this.functions.get(id);
             if (!func) {
@@ -282,7 +278,9 @@ export class SyncServer extends events.EventEmitter {
             }
             let thisObj: any;
             try {
-                thisObj = this.checkByRef(thisArg);
+                thisObj = this.deserialize(thisArg);
+                if (typeof thisObj != "object" || !thisObj)
+                    throw new Error("thisArg is not an object");
             }
             catch (e) {
                 reject(e);
@@ -290,10 +288,7 @@ export class SyncServer extends events.EventEmitter {
 
             try {
                 for (let i = 0; i < args.length; i++) {
-                    let arg = args[i];
-                    if (typeof arg == "object") {
-                        args[i] = this.checkByRef(arg);
-                    }
+                    args[i] = this.deserialize(args[i]);
                 }
             }
             catch (e) {
@@ -303,7 +298,7 @@ export class SyncServer extends events.EventEmitter {
             try {
                 let retval = func.apply(thisObj, args);
                 Promise.resolve(retval).then((value) => {
-                    resolve(value);
+                    resolve(this.serialize(value));
                 });
             }
             catch (e) {
@@ -323,51 +318,22 @@ class Agent {
     private sentObjects = new WeakSet();
     public id: number;
 
-    private om_new: Function;
-    private om_set: Function;
-    private om_newType: Function;
-    private om_delete: Function;
     private socket_message: Function;
 
     constructor(om: SyncServer, socket: WebSocket, id: number) {
         this.om = om;
         this.socket = socket;
         this.id = id;
-        this.initialSync();
-
-        om.on("new", this.om_new = (meta: IObjectMetadata) => {
-            this.notifyNew(meta.originalObject);
-        });
-
-        om.on("set", this.om_set = (target: any, property: PropertyKey, value: any) => {
-            this.notifySet(target, property, value);
-        });
-
-        om.on("newType", this.om_newType = (typeInfo: Protocol.ITypeInfo) => {
-            this.notifyNewType(typeInfo);
-        })
-
-        om.on("delete", this.om_delete = (target: any, property: PropertyKey) => {
-            this.notifyDelete(target, property);
-        });
-
-        this.socket.on("message", this.socket_message = (data:any, flags:any) => {
+        this.socket.on("message", this.socket_message = (data: any, flags: any) => {
             this.processMessage(JSON.parse(data));
         })
     }
 
     public terminate() {
-        this.om.removeListener("new",this.om_new);
-        this.om.removeListener("set",this.om_set);
-        this.om.removeListener("newType",this.om_newType);
-        this.om.removeListener("delete",this.om_delete);
-        this.socket.removeListener("message",this.socket_message);
+
+        this.socket.removeListener("message", this.socket_message);
     }
 
-    private serialize(obj: any) {
-        this.notifyNew(obj);
-        return this.om.serialize(obj);
-    }
 
     private processMessage(cmd: Protocol.ICommand) {
         console.log(cmd);
@@ -384,7 +350,7 @@ class Agent {
             let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,
-                result: this.serialize(retVal),
+                result: retVal,
                 status: 0,
                 message: "OK"
             }
@@ -401,84 +367,8 @@ class Agent {
         })
     }
 
-    private initialSync() {
-
-        this.syncTypes();
-        this.syncObject(this.om.root);
-    }
-
-    private syncObject(obj: any) {
-        let keys = Object.keys(obj);
-        keys.forEach(key => {
-            let value = obj[key];
-            if (typeof value == "object" && value != null && value != undefined) {
-                this.syncObject(value);
-            }
-
-        });
-
-        this.notifyNew(obj);
-    }
-
-    private syncTypes() {
-        for (let value of this.om.typesByName.values()) {
-            this.notifyNewType(value);
-        }
-    }
-
     private send(data: any) {
         this.socket.send(JSON.stringify(data));
-    }
-
-    private notifyNew(obj: any) {
-        if (!this.om.isRegisteredType(obj) || this.sentObjects.has(obj))
-            return;
-
-        this.sentObjects.add(obj);
-        this.send({
-            command: "new",
-            objectId: this.om.getMetadata(obj).id,
-            newObj: this.serialize(obj)
-        } as Protocol.INewObjectCommand);
-    }
-
-    private notifySet(obj: any, property: PropertyKey, newValue: any) {
-        if (typeof newValue == "object" && newValue != null && newValue != undefined) {
-            newValue = { _byref: this.om.getMetadata(newValue).id };
-        }
-        else {
-            newValue = this.serialize(newValue);
-        }
-        this.send({
-            command: "set",
-            objectId: this.om.getMetadata(obj).id,
-            property: property,
-            value: newValue
-
-        } as Protocol.ISetPropertyCommand)
-    }
-
-    private notifyNewType(typeInfo: Protocol.ITypeInfo) {
-
-        this.send({
-            command: "newType",
-            typeInfo: typeInfo
-        } as Protocol.INewTypeCommand);
-    }
-
-    private notifyDelete(target: any, property: PropertyKey) {
-        this.send({
-            command: "delete",
-            objectId: this.om.getMetadata(target).id,
-            property: property
-        })
-    }
-
-    public alive(aliveIds: number[]) {
-        this.send({
-            command: "alive",
-            aliveIds
-        } as Protocol.IKeepAliveCommand);
     }
 
 }

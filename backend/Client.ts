@@ -30,7 +30,6 @@ export class SyncClient extends EventEmitter {
 
     private socket: WebSocket;
     public root: any;
-    private objects = new Map<number, any>();
     private objecIds = new WeakMap<any, number>();
     private typesByName = new Map<string, ILocalTypeInfo>();
     private calls = new Map<number, IPromiseInfo>();
@@ -41,6 +40,11 @@ export class SyncClient extends EventEmitter {
 
         this.socket.onopen = () => {
             console.log("socket open");
+            let root = { _byRef: 0 };
+            this.invokeRemoteFunction(2, root, [0] as any).then(obj => {
+                this.root = obj;
+                this.emit("root");
+            })
         };
 
         this.socket.onmessage = (event) => {
@@ -53,110 +57,162 @@ export class SyncClient extends EventEmitter {
     }
 
 
-
-    private getObject(obj: any | Protocol.IByRef): any {
-        if (typeof obj == "object" && obj != null && obj != undefined) {
-            let id = (obj as Protocol.IByRef)._byref;
-            if (id == undefined) {
-                return obj; // byValue object
-            }
-            obj = this.objects.get(id);
-            if (obj == undefined) {
-                log.error(`Unknown Object id ${id}`);
-            }
-        }
-        return obj;
-    }
-
     private processMessage(cmd: Protocol.ICommand) {
         console.log(cmd);
         switch (cmd.command) {
-            case "new": this.process_new(cmd as Protocol.INewObjectCommand); break;
-            case "set": this.process_set(cmd as Protocol.ISetPropertyCommand); break;
-            case "newType": this.process_newType(cmd as Protocol.INewTypeCommand); break;
             case "result": this.process_result(cmd as Protocol.IInvokeResultCommand); break;
-            case "alive": this.process_alive(cmd as Protocol.IKeepAliveCommand); break;
             default: {
                 log.warn("Unknown cmd type " + cmd.command);
             }
         }
     }
 
-    private process_new(cmd: Protocol.INewObjectCommand) {
-        let obj = cmd.newObj;
-        let id = cmd.objectId;
-        let self = this;
-
-        let type = obj._type as string;
-        if (type)
-            delete obj._type;
-
-        let keys = Object.keys(obj);
-        let construct: any = Object;
-
-        if (type) {
-
-            if (type === "array") {
-                let arr: any[] = [];
-                keys.forEach(key => {
-                    arr[parseInt(key, 10)] = obj[key];
-                });
-                obj = arr;
-                this.objects.set(id, arr);
-            } else {
-                let typeInfo = this.typesByName.get(type);
-                if (!typeInfo) {
-                    log.error(`Unknown type ${type}`);
-                    return;
-                }
-
-                construct = typeInfo.prototype;
-            }
-        }
-
-        let newObj = new construct();
-
-        keys.forEach(key => {
-            let value = obj[key];
-            newObj[key] = this.getObject(value);
-
-        });
-
-        this.objects.set(id, newObj);
-        this.objecIds.set(newObj, id);
-
-        this.emit("new", newObj);
-
-        if (id == 0) {
-            this.root = newObj;
-            console.log("root");
-            console.log(newObj);
-            this.emit("sync");
-        }
-    }
-
-    private process_set(cmd: Protocol.ISetPropertyCommand) {
-        let obj = this.objects.get(cmd.objectId);
-        let value = this.getObject(cmd.value);
-        obj[cmd.property] = value;
-
-        console.log("set");
-        console.log(obj);
-    }
-
-    private process_newType(cmd: Protocol.INewTypeCommand) {
-        let typeInfo = cmd.typeInfo as ILocalTypeInfo;
-
-        let Proto = function (): any { }
+    private makeType(typeInfo: Protocol.ITypeInfo): ILocalTypeInfo {
+        let localTypeInfo = typeInfo as ILocalTypeInfo;
+        let Proto = function (): any { };
+        Proto["_type"] = typeInfo.name;
 
         for (var methodName of Object.keys(typeInfo.methods)) {
             Proto.prototype[methodName] = this.generateProxyFunction(typeInfo.methods[methodName]);
         }
 
-        typeInfo.prototype = Proto as any;
+        for (var methodName of Object.keys(typeInfo.clientMethods)) {
+            let clientMethodInfo = typeInfo.clientMethods[methodName];
+            Proto.prototype[methodName] = new Function(...clientMethodInfo.args, clientMethodInfo.body);
+        }
 
-        this.typesByName.set(typeInfo.name, typeInfo);
+        localTypeInfo.prototype = Proto as any;
+
+        this.typesByName.set(typeInfo.name, localTypeInfo);
+        return localTypeInfo;
     }
+
+    private getType(typeName: string): Promise<Function> {
+        let typeInfo = this.typesByName.get(typeName);
+        if (typeInfo) {
+            return Promise.resolve(typeInfo.prototype);
+        }
+
+        return new Promise<Function>((resolve, reject) => {
+
+            let typeReceived = (typeInfo?: Protocol.ITypeInfo) => {
+                let localTypeInfo = this.makeType(typeInfo);
+                resolve(localTypeInfo.prototype);
+
+            }
+
+            let typeNotFound = (err: Error) => {
+                reject(err);
+            }
+
+            this.idCall++;
+            this.calls.set(this.idCall, { resolve: typeReceived, reject: typeNotFound });
+            let cmd: Protocol.IInvokeCommand = {
+                command: "invoke",
+                functionId: 1, //getType
+                callId: this.idCall,
+                thisArg: { _byRef: 0 }, //Root
+                args: [typeName],
+            }
+            this.send(cmd);
+
+
+        });
+
+    }
+
+    private serialize(obj: any): any {
+
+        if (Array.isArray(obj)) {
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.serialize(element));
+            });
+            return arr;
+        }
+
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        if (obj.constructor._type) {
+            let id = this.objecIds.get(obj);
+            if (id === undefined) {
+                log.error(`Unknown object with id ${id}.`);
+                return null;
+            }
+            return { _byRef: id };
+        }
+
+        let ret: any = {};
+
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            ret[key] = this.serialize(obj[key]);
+        });
+
+        return ret;
+
+    }
+
+    private deserializeFast(obj: any): any {
+
+        if (Array.isArray(obj)) {
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.deserializeFast(element));
+            });
+            return arr;
+        }
+
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        let ret: any;
+        if (obj._byRef !== undefined && obj._type) {
+            let typeInfo = this.typesByName.get(obj._type);
+            if (typeInfo == undefined)
+                throw {
+                    message: "Unknown type",
+                    typeName: obj._type
+                };
+            ret = new typeInfo.prototype();
+            this.objecIds.set(ret, obj._byRef);
+            delete obj._byRef;
+            delete obj._type;
+
+        }
+        else
+            ret = {};
+
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            ret[key] = this.deserializeFast(obj[key]);
+        });
+
+        return ret;
+
+    }
+
+    private deserialize(obj: any): Promise<any> {
+        let ret: any;
+        try {
+            ret = this.deserializeFast(obj);
+            return Promise.resolve(ret);
+        }
+        catch (err) {
+            if (err.typeName) {
+                return new Promise((resolve, reject) => {
+                    this.getType(err.typeName).then(typeInfo => {
+                        this.deserialize(obj).then(resolve);
+                    }).catch(err => {
+                        reject(err);
+                    });
+                });
+            }
+        }
+    }
+
+
 
     private process_result(cmd: Protocol.IInvokeResultCommand) {
 
@@ -169,25 +225,10 @@ export class SyncClient extends EventEmitter {
         this.calls.delete(cmd.callId);
 
         if (cmd.status == 0) {
-            promiseInfo.resolve(this.getObject(cmd.result));
+            this.deserialize(cmd.result).then(promiseInfo.resolve);
+
         } else
             promiseInfo.reject(cmd.message);
-    }
-
-    private process_alive(cmd: Protocol.IKeepAliveCommand) {
-        let objects = this.objects;
-        this.objects = new Map<number, any>();
-        cmd.aliveIds.forEach(id => {
-            let obj = objects.get(id);
-            if (obj)
-                this.objects.set(id, obj);
-        });
-    }
-
-    private process_delete(cmd: Protocol.IDeleteCommand) {
-        let obj = this.getObject(cmd.objectId);
-        this.emit("delete", obj, cmd.property);
-        delete obj[cmd.property];
     }
 
     private generateProxyFunction(id: number) {
@@ -202,15 +243,17 @@ export class SyncClient extends EventEmitter {
         if (id == undefined)
             return obj;
         else
-            return { _byref: id };
+            return { _byRef: id };
     }
 
     private idCall = 0;
-    private invokeRemoteFunction(id: number, thisArg: any, args: IArguments) {
-        thisArg = this.getRef(thisArg);
+    private invokeRemoteFunction(id: number, thisArg: any, args: IArguments = null) {
+        thisArg = this.serialize(thisArg);
         let a: any[] = [];
-        for (var i = 0; i < args.length; i++) {
-            a[i] = this.getRef(args[i]);
+        if (args) {
+            for (var i = 0; i < args.length; i++) {
+                a[i] = this.serialize(args[i]);
+            }
         }
         this.idCall++;
         return new Promise<any>((resolve, reject) => {
@@ -225,7 +268,6 @@ export class SyncClient extends EventEmitter {
             this.send(cmd);
 
         });
-
     }
 
     private send(data: any) {
