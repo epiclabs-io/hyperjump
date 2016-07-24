@@ -129,5 +129,15 @@ function main() {
 
 }
 
+async function produceNumber():Promise<number>{
+
+    return new Promise<number>((resolve,reject)=>{
+        setTimeout(()=>{
+            resolve(5);
+        },1000);
+    });
+
+}
+
 main();
 

@@ -193,28 +193,22 @@ export class SyncClient extends EventEmitter {
 
     }
 
-    private deserialize(obj: any): Promise<any> {
-        let ret: any;
+    private async deserialize(obj: any): Promise<any> {
+
         try {
-            ret = this.deserializeFast(obj);
-            return Promise.resolve(ret);
+            return this.deserializeFast(obj);
         }
         catch (err) {
             if (err.typeName) {
-                return new Promise((resolve, reject) => {
-                    this.getType(err.typeName).then(typeInfo => {
-                        this.deserialize(obj).then(resolve);
-                    }).catch(err => {
-                        reject(err);
-                    });
-                });
+                await this.getType(err.typeName);
+                return this.deserialize(obj);
             }
         }
     }
 
 
 
-    private process_result(cmd: Protocol.IInvokeResultCommand) {
+    private async process_result(cmd: Protocol.IInvokeResultCommand) {
 
         let promiseInfo = this.calls.get(cmd.callId);
         if (!promiseInfo) {
@@ -225,7 +219,7 @@ export class SyncClient extends EventEmitter {
         this.calls.delete(cmd.callId);
 
         if (cmd.status == 0) {
-            this.deserialize(cmd.result).then(promiseInfo.resolve);
+            promiseInfo.resolve(await this.deserialize(cmd.result));
 
         } else
             promiseInfo.reject(cmd.message);
