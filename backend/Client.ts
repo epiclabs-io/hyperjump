@@ -38,13 +38,12 @@ export class SyncClient extends EventEmitter {
         super();
         this.socket = socket;
 
-        this.socket.onopen = () => {
+        this.socket.onopen = async () => {
             console.log("socket open");
             let root = { _byRef: 0 };
-            this.invokeRemoteFunction(2, root, [0] as any).then(obj => {
-                this.root = obj;
-                this.emit("root");
-            })
+            this.root = await this.invokeRemoteFunction(2, root, [0] as any)
+            this.emit("root");
+
         };
 
         this.socket.onmessage = (event) => {
@@ -87,10 +86,10 @@ export class SyncClient extends EventEmitter {
         return localTypeInfo;
     }
 
-    private getType(typeName: string): Promise<Function> {
+    private async getType(typeName: string): Promise<Function> {
         let typeInfo = this.typesByName.get(typeName);
         if (typeInfo) {
-            return Promise.resolve(typeInfo.prototype);
+            return typeInfo.prototype;
         }
 
         return new Promise<Function>((resolve, reject) => {

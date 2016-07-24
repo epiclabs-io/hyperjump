@@ -23,9 +23,14 @@ function createRootClass(server: SyncServer): { new (): any } {
         public getObject(id: number) {
             return server.getObject(id);
         }
+        public pingObjects(obj: any[]) {
+        }
     }
     return Root;
 }
+
+const GC_TIMER = 60 * 1000;
+const GC_OBJECT_TIMEOUT = 5 * 60 * 1000;
 
 export class SyncServer extends events.EventEmitter {
 
@@ -68,17 +73,22 @@ export class SyncServer extends events.EventEmitter {
 
 
         this.objects = new WeakMap<Object, IObjectMetadata>();
- 
+
         let Root = createRootClass(this);
         this.root_ = new Root();
- 
+
         this.registerType(Root, "Root");
-        this.getMetadata(this.root_).lastPing = -1;//id 0, keep forever
+        this.pin(this.root_); //id 0, keep forever
         this.registerMethod(Root, "getType"); // func 1.
         this.registerMethod(Root, "getObject"); // func 2.
+        this.registerMethod(Root, "pingObjects");
+
+        setInterval(() => {
+            this.gc();
+        }, GC_TIMER);
     }
 
-    public get root():any{
+    public get root(): any {
         return this.root_;
     }
 
@@ -87,7 +97,19 @@ export class SyncServer extends events.EventEmitter {
     }
 
     public getObject(id: number) {
-        return this.objectIds.get(id);
+        let obj = this.objectIds.get(id);
+        if (!obj)
+            return null;
+
+        this.pingObject(obj);
+        return obj;
+    }
+    public pingObject(obj: any) {
+        this.getMetadata(obj);
+    }
+
+    public pin(obj:any){
+        this.getMetadata(obj).lastPing=-1;
     }
 
     private removeAgent(agent: Agent) {
@@ -109,8 +131,11 @@ export class SyncServer extends events.EventEmitter {
         }
 
         let metadata = this.objects.get(obj);
-        if (metadata)
+        if (metadata) {
+            if (metadata.lastPing !== -1)
+                metadata.lastPing = (new Date()).getTime();
             return metadata;
+        }
 
         metadata = {
             id: this.objectCounter++,
@@ -204,8 +229,10 @@ export class SyncServer extends events.EventEmitter {
         });
 
         if (type) {
+            let metadata = this.getMetadata(obj);
             ret._type = type.name;
-            ret._byRef = this.getMetadata(obj).id;
+            ret._byRef = metadata.id;
+
         }
 
         return ret;
@@ -240,26 +267,10 @@ export class SyncServer extends events.EventEmitter {
 
     }
 
-    public getObjectById(id: number): any {
-        let obj = this.objectIds.get(id);
-        if (!obj)
-            return null;
-
-        this.pingObj(obj);
-        return obj;
-
-    }
-
-    public pingObj(obj: any) {
-        //try {
-        this.getMetadata(obj).lastPing = (new Date()).getTime();
-        //} catch (e) { }
-    }
-
     public getObjectByRef(obj: any | Protocol.IByRef): any {
 
         if (obj._byRef != undefined) {
-            let ret = this.getObjectById(obj._byRef);
+            let ret = this.getObject(obj._byRef);
             if (!ret)
                 throw new Error(`Unknown reference to object with id ${obj._byRef}`);
             return ret;
@@ -307,6 +318,18 @@ export class SyncServer extends events.EventEmitter {
 
         });
 
+    }
+
+    public gc() {
+        let now = (new Date()).getTime();
+        for (let [id, obj] of this.objectIds) {
+            let meta = this.objects.get(obj);
+            if (meta && meta.lastPing !== -1) {
+                if (now - meta.lastPing > GC_OBJECT_TIMEOUT) {
+                    this.objectIds.delete(id);
+                }
+            }
+        }
     }
 }
 
