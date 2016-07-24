@@ -19,12 +19,20 @@ var log = {
 
 interface ILocalTypeInfo extends Protocol.ITypeInfo {
     prototype: { new (): any };
+    serializer?: Function;
+    deserializer?: Function;
 }
 
 interface IPromiseInfo {
     resolve: (value: any) => void;
     reject: (reason: any) => void;
 }
+
+export interface IRemoteObjectInfo {
+    events: Map<string, Set<Function>>;
+}
+
+const PING_OBJECTS_PERIOD = 60 * 1000;
 
 export class SyncClient extends EventEmitter {
 
@@ -33,6 +41,7 @@ export class SyncClient extends EventEmitter {
     private objecIds = new WeakMap<any, number>();
     private typesByName = new Map<string, ILocalTypeInfo>();
     private calls = new Map<number, IPromiseInfo>();
+    private tracklist = new Map<number, IRemoteObjectInfo>();
 
     constructor(socket: any) {
         super();
@@ -44,6 +53,8 @@ export class SyncClient extends EventEmitter {
             this.root = await this.invokeRemoteFunction(2, root, [0] as any)
             this.emit("root");
 
+            this.schedulePing();
+
         };
 
         this.socket.onmessage = (event) => {
@@ -53,6 +64,15 @@ export class SyncClient extends EventEmitter {
         this.socket.onerror = (ev) => {
             log.error(ev.toString());
         }
+
+
+    }
+
+    private schedulePing() {
+        setInterval(() => {
+            this.root.pingObjects([...this.tracklist.keys()]);
+
+        }, PING_OBJECTS_PERIOD);
     }
 
 
@@ -60,10 +80,15 @@ export class SyncClient extends EventEmitter {
         console.log(cmd);
         switch (cmd.command) {
             case "result": this.process_result(cmd as Protocol.IInvokeResultCommand); break;
+            case "event": this.process_event(cmd as Protocol.IEventFiredCommand); break;
             default: {
                 log.warn("Unknown cmd type " + cmd.command);
             }
         }
+    }
+
+    private makeFunction(funcDef: Protocol.IFunctionDefinition): Function {
+        return new Function(...funcDef.args, funcDef.body);
     }
 
     private makeType(typeInfo: Protocol.ITypeInfo): ILocalTypeInfo {
@@ -77,7 +102,12 @@ export class SyncClient extends EventEmitter {
 
         for (var methodName of Object.keys(typeInfo.clientMethods)) {
             let clientMethodInfo = typeInfo.clientMethods[methodName];
-            Proto.prototype[methodName] = new Function(...clientMethodInfo.args, clientMethodInfo.body);
+            Proto.prototype[methodName] = this.makeFunction(clientMethodInfo);
+        }
+
+        if (typeInfo.serializationInfo) {
+            typeInfo.serializationInfo.deserialize = this.makeFunction(typeInfo.serializationInfo.deserializerDef) as any;
+            typeInfo.serializationInfo.serialize = this.makeFunction(typeInfo.serializationInfo.serializerDef) as any;
         }
 
         localTypeInfo.prototype = Proto as any;
@@ -176,8 +206,7 @@ export class SyncClient extends EventEmitter {
                 };
             ret = new typeInfo.prototype();
             this.objecIds.set(ret, obj._byRef);
-            delete obj._byRef;
-            delete obj._type;
+
 
         }
         else
@@ -185,8 +214,11 @@ export class SyncClient extends EventEmitter {
 
         let keys = Object.keys(obj);
         keys.forEach(key => {
-            ret[key] = this.deserializeFast(obj[key]);
+            if (key != "_byRef" && key != "_type")
+                ret[key] = this.deserializeFast(obj[key]);
         });
+
+
 
         return ret;
 
@@ -218,10 +250,27 @@ export class SyncClient extends EventEmitter {
         this.calls.delete(cmd.callId);
 
         if (cmd.status == 0) {
-            promiseInfo.resolve(await this.deserialize(cmd.result));
+            let result = await this.deserialize(cmd.result);
+            promiseInfo.resolve(result);
 
         } else
             promiseInfo.reject(cmd.message);
+    }
+
+    private async process_event(cmd: Protocol.IEventFiredCommand) {
+
+        let id = cmd.sourceObjectId;
+        if (id == undefined)
+            return;
+
+        let objectInfo: IRemoteObjectInfo = this.tracklist.get(id);
+        let events: Map<string, Set<Function>>;
+        let handlers: Set<Function>;
+        if (objectInfo && (events = objectInfo.events) && (handlers = events.get(cmd.eventName))) {
+            handlers.forEach(async (handler) => {
+                handler.apply(null, await this.deserialize(cmd.args));
+            })
+        }
     }
 
     private generateProxyFunction(id: number) {
@@ -265,6 +314,80 @@ export class SyncClient extends EventEmitter {
 
     private send(data: any) {
         this.socket.send(JSON.stringify(data));
+    }
+
+    public track(obj: any): IRemoteObjectInfo {
+        let id = this.objecIds.get(obj);
+        if (id === undefined)
+            throw new Error("Can't track unknown object");
+
+        let objectInfo = this.tracklist.get(id);
+        if (!objectInfo) {
+            objectInfo = {
+                events: null
+            }
+            this.tracklist.set(id, objectInfo);
+        }
+        return objectInfo;
+    }
+
+    public untrack(obj: any) {
+        let id = this.objecIds.get(obj);
+        if (id === undefined)
+            throw new Error("Can't untrack unknown object");
+
+        this.tracklist.delete(id);
+
+    }
+
+    public async listen(obj: any, eventName: string, listener: Function): Promise<void> {
+        let objectInfo = this.track(obj);
+        let events = objectInfo.events;
+        if (!events) {
+            events = objectInfo.events = new Map<string, Set<Function>>();
+        }
+        let handlers = events.get(eventName);
+        if (!handlers) {
+            events.set(eventName, handlers = new Set<Function>());
+
+        }
+        if (handlers.has(listener))
+            return;
+
+        handlers.add(listener);
+        if (handlers.size == 1)
+            return this.root.listen(obj, eventName);
+        else
+            return;
+
+    }
+
+    public async unlisten(obj: any, eventName: string, listener: Function) {
+        let id = this.objecIds.get(obj);
+        if (id === undefined)
+            return;
+
+        let objectInfo = this.tracklist.get(id);
+        if (!objectInfo)
+            return;
+
+        let events = objectInfo.events;
+        if (!events) {
+            return;
+        }
+        let handlers = events.get(eventName);
+        if (!handlers) {
+            return;
+        }
+        if (!handlers.has(listener))
+            return;
+
+        handlers.delete(listener);
+
+        if (handlers.size == 0)
+            return this.root.unlisten(obj, eventName);
+        else
+            return;
     }
 
 }

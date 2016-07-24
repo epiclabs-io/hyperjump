@@ -8,10 +8,18 @@ const parseFunction = require("parse-function");
 
 var log = loglevel.getLogger("modelsync-server");
 
-export interface IObjectMetadata {
+interface IObjectMetadata {
     id: number,
-    lastPing: number
+    lastPing: number,
+    obj: any,
+    events: Map<string, Set<Agent>>;
 }
+
+export interface IContextInfo {
+    agent: Agent
+}
+
+
 
 function createRootClass(server: SyncServer): { new (): any } {
 
@@ -25,9 +33,19 @@ function createRootClass(server: SyncServer): { new (): any } {
         }
         public pingObjects(obj: any[]) {
         }
+
+        public listen(obj: any, eventName: string) {
+            return server.listen(obj, eventName);
+        }
+
+        public unlisten(obj: any, eventName: string) {
+            return server.unlisten(obj, eventName);
+        }
     }
     return Root;
 }
+
+
 
 const GC_TIMER = 60 * 1000;
 const GC_OBJECT_TIMEOUT = 5 * 60 * 1000;
@@ -38,10 +56,11 @@ export class SyncServer extends events.EventEmitter {
     private functions = new Map<number, Function>();
     private types: WeakMap<Function, Protocol.ITypeInfo>;
     public typesByName: Map<string, Protocol.ITypeInfo>;
-    private objectIds: Map<number, any>;
+    private objectIds: Map<number, IObjectMetadata>;
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
     private root_: any;
+    private currentContext_: IContextInfo = null;
 
     constructor(server: http.Server, path: string) {
         super();
@@ -50,7 +69,7 @@ export class SyncServer extends events.EventEmitter {
         let agentId = 0;
         this.types = new WeakMap<any, Protocol.ITypeInfo>();
         this.typesByName = new Map<string, Protocol.ITypeInfo>();
-        this.objectIds = new Map<number, any>();
+        this.objectIds = new Map<number, IObjectMetadata>();
 
         wss.on("connection", (socket) => {
             let agent = new Agent(this, socket, agentId++);
@@ -82,6 +101,8 @@ export class SyncServer extends events.EventEmitter {
         this.registerMethod(Root, "getType"); // func 1.
         this.registerMethod(Root, "getObject"); // func 2.
         this.registerMethod(Root, "pingObjects");
+        this.registerMethod(Root, "listen");
+        this.registerMethod(Root, "unlisten");
 
         setInterval(() => {
             this.gc();
@@ -91,13 +112,16 @@ export class SyncServer extends events.EventEmitter {
     public get root(): any {
         return this.root_;
     }
+    public get currentContext() {
+        return this.currentContext_;
+    }
 
     public getType(typeName: string): Protocol.ITypeInfo {
         return this.typesByName.get(typeName);
     }
 
     public getObject(id: number) {
-        let obj = this.objectIds.get(id);
+        let obj = this.objectIds.get(id).obj;
         if (!obj)
             return null;
 
@@ -108,12 +132,19 @@ export class SyncServer extends events.EventEmitter {
         this.getMetadata(obj);
     }
 
-    public pin(obj:any){
-        this.getMetadata(obj).lastPing=-1;
+    public pin(obj: any) {
+        this.getMetadata(obj).lastPing = -1;
     }
 
     private removeAgent(agent: Agent) {
         agent.terminate();
+        this.objectIds.forEach(meta => {
+            if (meta.events) {
+                meta.events.forEach(event => {
+                    event.delete(agent);
+                })
+            }
+        })
         this.agents.delete(agent.id);
     }
 
@@ -124,7 +155,7 @@ export class SyncServer extends events.EventEmitter {
             return this.types.get(obj.constructor);
     }
 
-    public getMetadata(obj: any): IObjectMetadata {
+    private getMetadata(obj: any): IObjectMetadata {
 
         if (!this.getTypeInfo(obj)) {
             throw new Error("can't get metadata from a non-object or unregistered type");
@@ -139,10 +170,12 @@ export class SyncServer extends events.EventEmitter {
 
         metadata = {
             id: this.objectCounter++,
-            lastPing: (new Date()).getTime()
+            lastPing: (new Date()).getTime(),
+            obj: obj,
+            events: null
         }
         this.objects.set(obj, metadata);
-        this.objectIds.set(metadata.id, obj);
+        this.objectIds.set(metadata.id, metadata);
 
         return metadata;
     }
@@ -165,6 +198,8 @@ export class SyncServer extends events.EventEmitter {
 
 
     public registerMethodEx(type: Function, func: Function, name?: string) {
+        if (!func)
+            throw new Error("cant' register undefined function");
         let typeInfo = this.types.get(type);
         if (!typeInfo) {
             typeInfo = this.registerType(type);
@@ -200,6 +235,20 @@ export class SyncServer extends events.EventEmitter {
         return id;
     }
 
+    public registerSerializer(type: Function, serializationInfo: Protocol.ISerializationInfo) {
+        let typeInfo = this.types.get(type);
+        if (!typeInfo)
+            throw new Error("Can't set serializer to unregistered type");
+        typeInfo.serializationInfo = serializationInfo;
+        
+        if (!serializationInfo.serializerDef)
+            serializationInfo.serializerDef = parseFunction(serializationInfo.serialize);
+        
+        if (!serializationInfo.deserializerDef)
+            serializationInfo.deserializerDef = parseFunction(serializationInfo.deserialize);
+
+    }
+
     public createGenericType(name: string): { new (): any } {
         let type = function () { };
         this.registerType(type, name);
@@ -220,6 +269,9 @@ export class SyncServer extends events.EventEmitter {
             return obj; //primitive type
 
         let type = this.getTypeInfo(obj);
+        if (type && type.serializationInfo && type.serializationInfo.serialize) {
+            obj = type.serializationInfo.serialize(obj);
+        }
 
         let ret: any = {};
 
@@ -280,7 +332,7 @@ export class SyncServer extends events.EventEmitter {
     }
 
 
-    public invokeFunction(id: number, thisArg: any, args: any[]) {
+    public invokeFunction(id: number, thisArg: any, agent: Agent, args: any[]) {
         return new Promise<any>((resolve, reject) => {
             let func = this.functions.get(id);
             if (!func) {
@@ -307,7 +359,9 @@ export class SyncServer extends events.EventEmitter {
             }
 
             try {
+                this.currentContext_ = { agent: agent };
                 let retval = func.apply(thisObj, args);
+                this.currentContext_ = null;
                 Promise.resolve(retval).then((value) => {
                     resolve(this.serialize(value));
                 });
@@ -319,12 +373,53 @@ export class SyncServer extends events.EventEmitter {
         });
 
     }
+    public listen(obj: any, eventName: string) {
+        let agent = this.currentContext_ && this.currentContext_.agent;
+        if (!agent)
+            throw new Error("no current context calling listen()");
+
+        let meta = this.getMetadata(obj);
+        if (!meta.events)
+            meta.events = new Map<string, Set<Agent>>();
+        let agents = meta.events.get(eventName);
+        if (!agents)
+            meta.events.set(eventName, agents = new Set<Agent>());
+        agents.add(agent);
+    }
+
+    public unlisten(obj: any, eventName: string) {
+        let agent = this.currentContext_ && this.currentContext_.agent;
+        if (!agent)
+            throw new Error("no current context calling unlisten()");
+
+        let meta = this.getMetadata(obj);
+        if (!meta.events)
+            return;
+
+        let agents = meta.events.get(eventName);
+        if (!agents)
+            return;
+
+        agents.delete(agent);
+
+    }
+
+    public fireEvent(sourceObj: any, eventName: string, ...args: any[]) {
+        let meta = this.getMetadata(sourceObj);
+        if (meta.events) {
+            let event = meta.events.get(eventName);
+            if (event) {
+                event.forEach(agent => {
+                    agent.notifyEventFired(meta.id, eventName, this.serialize(args));
+                });
+            }
+        }
+    }
 
     public gc() {
         let now = (new Date()).getTime();
-        for (let [id, obj] of this.objectIds) {
-            let meta = this.objects.get(obj);
-            if (meta && meta.lastPing !== -1) {
+        for (let [id, meta] of this.objectIds) {
+            if (meta.lastPing !== -1) {
                 if (now - meta.lastPing > GC_OBJECT_TIMEOUT) {
                     this.objectIds.delete(id);
                 }
@@ -333,13 +428,17 @@ export class SyncServer extends events.EventEmitter {
     }
 }
 
+interface IEventInfo {
 
-class Agent {
+}
+
+export class Agent {
 
     private om: SyncServer;
     private socket: WebSocket;
     private sentObjects = new WeakSet();
     public id: number;
+    private eventSubscriptions = new WeakMap<any, Set<string>>();
 
     private socket_message: Function;
 
@@ -369,7 +468,7 @@ class Agent {
     }
 
     private process_invoke(cmd: Protocol.IInvokeCommand) {
-        this.om.invokeFunction(cmd.functionId, cmd.thisArg, cmd.args).then(retVal => {
+        this.om.invokeFunction(cmd.functionId, cmd.thisArg, this, cmd.args).then(retVal => {
             let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,
@@ -392,6 +491,15 @@ class Agent {
 
     private send(data: any) {
         this.socket.send(JSON.stringify(data));
+    }
+
+    public notifyEventFired(sourceObjectId: number, eventName: string, args: any[]) {
+        this.send({
+            command: "event",
+            eventName: eventName,
+            args: args,
+            sourceObjectId:sourceObjectId
+        } as Protocol.IEventFiredCommand)
     }
 
 }

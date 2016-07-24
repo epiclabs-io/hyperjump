@@ -1,14 +1,23 @@
 
 
-export interface IFunctionDefinition{
-    args:string[];
-    body:string;
+export interface IFunctionDefinition {
+    args: string[];
+    body: string;
+}
+
+
+export interface ISerializationInfo {
+    serialize: (obj: any) => any;
+    deserialize: (obj: any) => any;
+    serializerDef: IFunctionDefinition;
+    deserializerDef: IFunctionDefinition;
 }
 
 export interface ITypeInfo {
     name: string,
-    methods: { [methodName: string]: number },
-    clientMethods:{ [methodName: string]: IFunctionDefinition };
+    methods: { [methodName: string]: number };
+    clientMethods: { [methodName: string]: IFunctionDefinition };
+    serializationInfo?:ISerializationInfo;
 }
 
 export interface IByRef {
@@ -18,11 +27,6 @@ export interface IByRef {
 
 export interface ICommand {
     command: string,
-}
-
-export interface INewObjectCommand extends ICommand {
-    newObj: any,
-    objectId: number
 }
 
 export interface IInvokeCommand extends ICommand {
@@ -40,22 +44,18 @@ export interface IInvokeResultCommand extends ICommand {
     message?: string
 }
 
-export interface ISetPropertyCommand extends ICommand {
+export interface IEventFiredCommand extends ICommand {
+    sourceObjectId: any,
+    eventName: string,
+    args: any[]
+}
+
+export interface IEventListenCommand extends ICommand {
     objectId: number,
-    property: string,
-    value: any
+    eventName: string
 }
 
-export interface INewTypeCommand extends ICommand {
-    typeInfo: ITypeInfo
-}
-
-export interface IKeepAliveCommand extends ICommand {
-    aliveIds: number[]
-}
-
-export interface IDeleteCommand extends ICommand {
+export interface IEventUnListenCommand extends ICommand {
     objectId: number,
-    property: string
+    eventName: string
 }
-

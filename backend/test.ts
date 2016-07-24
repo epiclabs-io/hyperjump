@@ -98,6 +98,11 @@ function main() {
     omServer.registerMethod(Thing, "speak");
     omServer.root.t = t;
 
+
+    setInterval(() => {
+        omServer.fireEvent(t, "tick", (new Date().getTime()));
+    }, 1000);
+
     omServer.registerMethodEx(omServer.constructor, function (a: number, b: number) {
         return a + b;
     }, "sum");
@@ -111,8 +116,19 @@ function main() {
     c.on("root", async () => {
         console.log("Root!");
 
-    let ret = await c.root.t.speak("perry");
-    console.log(ret);
+        let ret = await c.root.t.speak("perry");
+
+        let count = 0;
+        let listener = (val:any) => {
+            console.log("tick " + val);
+            count++;
+            if (count == 2) {
+                c.unlisten(c.root.t, "tick", listener);
+            }
+        }
+        c.listen(c.root.t, "tick", listener);
+
+        console.log(ret);
     });
 
     setTimeout(() => {
@@ -129,12 +145,12 @@ function main() {
 
 }
 
-async function produceNumber():Promise<number>{
+async function produceNumber(): Promise<number> {
 
-    return new Promise<number>((resolve,reject)=>{
-        setTimeout(()=>{
+    return new Promise<number>((resolve, reject) => {
+        setTimeout(() => {
             resolve(5);
-        },1000);
+        }, 1000);
     });
 
 }
