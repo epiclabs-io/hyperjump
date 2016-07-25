@@ -136,10 +136,10 @@ function main() {
         console.log(ret);
     });
 
-    setTimeout(() => {
+    setTimeout(async () => {
 
-        c.root.t.print("Hola");
-        c.root.t.print(new Date());
+        await c.root.t.print("Hola");
+        await c.root.t.print(new Date());
 
     }, 4000);
 

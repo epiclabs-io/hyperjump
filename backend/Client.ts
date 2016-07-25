@@ -17,7 +17,7 @@ var log = {
     },
 }
 
-interface ILocalTypeInfo extends Protocol.ITypeInfo {
+export interface ILocalTypeInfo extends Protocol.ITypeInfo {
     prototype: { new (): any };
 }
 
@@ -63,10 +63,14 @@ export class SyncClient extends EventEmitter {
         this.socket.onerror = (ev) => {
             log.error(ev.toString());
         }
-        
-        this.types.set(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
-        this.typesByName.set("Date", Protocol.DateTypeInfo as ILocalTypeInfo);
 
+        this.registerTypeInfo(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
+
+    }
+
+    public registerTypeInfo(type: Function, typeInfo: ILocalTypeInfo) {
+        this.types.set(type, typeInfo);
+        this.typesByName.set(type.name, typeInfo);
     }
 
     private schedulePing() {
@@ -95,7 +99,7 @@ export class SyncClient extends EventEmitter {
     private makeType(typeInfo: Protocol.ITypeInfo): ILocalTypeInfo {
         let localTypeInfo = typeInfo as ILocalTypeInfo;
         let Proto = function (): any { };
-        Proto["_type"] = typeInfo.name;
+        //Proto["_type"] = typeInfo.name;
 
         for (var methodName of Object.keys(typeInfo.methods)) {
             Proto.prototype[methodName] = this.generateProxyFunction(typeInfo.methods[methodName]);
