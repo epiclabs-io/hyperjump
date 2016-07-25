@@ -61,6 +61,10 @@ class Thing {
         return g;
     }
 
+    public print(st:any){
+        console.log("print any:" + st);
+    }
+
 
 
 }
@@ -96,11 +100,12 @@ function main() {
 
     omServer.registerType(Thing, "Thing");
     omServer.registerMethod(Thing, "speak");
+    omServer.registerMethod(Thing,"print");
     omServer.root.t = t;
 
 
     setInterval(() => {
-        omServer.fireEvent(t, "tick", (new Date().getTime()));
+        omServer.fireEvent(t, "tick", new Date());
     }, 1000);
 
     omServer.registerMethodEx(omServer.constructor, function (a: number, b: number) {
@@ -133,7 +138,8 @@ function main() {
 
     setTimeout(() => {
 
-
+        c.root.t.print("Hola");
+        c.root.t.print(new Date());
 
     }, 4000);
 

@@ -17,7 +17,8 @@ export interface ITypeInfo {
     name: string,
     methods: { [methodName: string]: number };
     clientMethods: { [methodName: string]: IFunctionDefinition };
-    serializationInfo?:ISerializationInfo;
+    serializationInfo?: ISerializationInfo;
+    isByRef: boolean;
 }
 
 export interface IByRef {
@@ -50,12 +51,20 @@ export interface IEventFiredCommand extends ICommand {
     args: any[]
 }
 
-export interface IEventListenCommand extends ICommand {
-    objectId: number,
-    eventName: string
-}
+export var DateTypeInfo: ITypeInfo = {
+    name: "Date",
+    methods: null,
+    clientMethods: null,
+    isByRef: false,
+    serializationInfo: {
+        serialize: (obj: any): any => {
+            return { time: (obj as Date).getTime() };
+        },
+        deserialize: (obj: any): any => {
+            return new Date(obj.time);
+        },
+        serializerDef: null,
+        deserializerDef: null
+    }
 
-export interface IEventUnListenCommand extends ICommand {
-    objectId: number,
-    eventName: string
 }

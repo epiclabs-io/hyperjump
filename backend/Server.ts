@@ -104,6 +104,11 @@ export class SyncServer extends events.EventEmitter {
         this.registerMethod(Root, "listen");
         this.registerMethod(Root, "unlisten");
 
+        this.types.set(Date, Protocol.DateTypeInfo);
+        this.typesByName.set("Date", Protocol.DateTypeInfo);
+
+
+
         setInterval(() => {
             this.gc();
         }, GC_TIMER);
@@ -180,7 +185,7 @@ export class SyncServer extends events.EventEmitter {
         return metadata;
     }
 
-    public registerType(type: Function, name?: string): Protocol.ITypeInfo {
+    public registerType(type: Function, name?: string, isByRef: boolean = true): Protocol.ITypeInfo {
         let typeInfo = this.types.get(type);
         if (typeInfo)
             throw new Error(`Type ${typeInfo.name} already registered`);
@@ -188,7 +193,8 @@ export class SyncServer extends events.EventEmitter {
         typeInfo = {
             name: name || type.name,
             methods: {},
-            clientMethods: {}
+            clientMethods: {},
+            isByRef: isByRef
 
         }
         this.types.set(type, typeInfo);
@@ -240,10 +246,10 @@ export class SyncServer extends events.EventEmitter {
         if (!typeInfo)
             throw new Error("Can't set serializer to unregistered type");
         typeInfo.serializationInfo = serializationInfo;
-        
+
         if (!serializationInfo.serializerDef)
             serializationInfo.serializerDef = parseFunction(serializationInfo.serialize);
-        
+
         if (!serializationInfo.deserializerDef)
             serializationInfo.deserializerDef = parseFunction(serializationInfo.deserialize);
 
@@ -269,6 +275,7 @@ export class SyncServer extends events.EventEmitter {
             return obj; //primitive type
 
         let type = this.getTypeInfo(obj);
+
         if (type && type.serializationInfo && type.serializationInfo.serialize) {
             obj = type.serializationInfo.serialize(obj);
         }
@@ -281,10 +288,11 @@ export class SyncServer extends events.EventEmitter {
         });
 
         if (type) {
-            let metadata = this.getMetadata(obj);
             ret._type = type.name;
-            ret._byRef = metadata.id;
-
+            if (type.isByRef) {
+                let metadata = this.getMetadata(obj);
+                ret._byRef = metadata.id;
+            }
         }
 
         return ret;
@@ -312,8 +320,16 @@ export class SyncServer extends events.EventEmitter {
 
         let keys = Object.keys(obj);
         keys.forEach(key => {
-            ret[key] = this.deserialize(obj[key]);
+            if (key != "_type")
+                ret[key] = this.deserialize(obj[key]);
         });
+
+        let type: Protocol.ITypeInfo;
+        if (obj._type && (type = this.typesByName.get(obj._type)) && !type.isByRef &&
+            type.serializationInfo && type.serializationInfo.deserialize) {
+
+            ret = type.serializationInfo.deserialize(ret);
+        }
 
         return ret;
 
@@ -498,7 +514,7 @@ export class Agent {
             command: "event",
             eventName: eventName,
             args: args,
-            sourceObjectId:sourceObjectId
+            sourceObjectId: sourceObjectId
         } as Protocol.IEventFiredCommand)
     }
 

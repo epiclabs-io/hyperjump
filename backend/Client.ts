@@ -19,8 +19,6 @@ var log = {
 
 interface ILocalTypeInfo extends Protocol.ITypeInfo {
     prototype: { new (): any };
-    serializer?: Function;
-    deserializer?: Function;
 }
 
 interface IPromiseInfo {
@@ -40,6 +38,7 @@ export class SyncClient extends EventEmitter {
     public root: any;
     private objecIds = new WeakMap<any, number>();
     private typesByName = new Map<string, ILocalTypeInfo>();
+    private types = new WeakMap<Function, ILocalTypeInfo>();
     private calls = new Map<number, IPromiseInfo>();
     private tracklist = new Map<number, IRemoteObjectInfo>();
 
@@ -64,7 +63,9 @@ export class SyncClient extends EventEmitter {
         this.socket.onerror = (ev) => {
             log.error(ev.toString());
         }
-
+        
+        this.types.set(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
+        this.typesByName.set("Date", Protocol.DateTypeInfo as ILocalTypeInfo);
 
     }
 
@@ -113,6 +114,7 @@ export class SyncClient extends EventEmitter {
         localTypeInfo.prototype = Proto as any;
 
         this.typesByName.set(typeInfo.name, localTypeInfo);
+        this.types.set(Proto, localTypeInfo);
         return localTypeInfo;
     }
 
@@ -163,13 +165,18 @@ export class SyncClient extends EventEmitter {
         if (typeof obj !== "object" || obj == null || obj == undefined)
             return obj; //primitive type
 
-        if (obj.constructor._type) {
+        let typeInfo = this.types.get(obj.constructor);
+
+        if (typeInfo) {
             let id = this.objecIds.get(obj);
-            if (id === undefined) {
-                log.error(`Unknown object with id ${id}.`);
-                return null;
+            if (id !== undefined) {
+                return { _byRef: id };
             }
-            return { _byRef: id };
+            if (typeInfo.serializationInfo && typeInfo.serializationInfo.serialize) {
+                obj = typeInfo.serializationInfo.serialize(obj);
+                obj._type = typeInfo.name;
+            }
+
         }
 
         let ret: any = {};
@@ -197,17 +204,21 @@ export class SyncClient extends EventEmitter {
             return obj; //primitive type
 
         let ret: any;
-        if (obj._byRef !== undefined && obj._type) {
-            let typeInfo = this.typesByName.get(obj._type);
+        let typeInfo: ILocalTypeInfo;
+        if (obj._type) {
+            typeInfo = this.typesByName.get(obj._type);
             if (typeInfo == undefined)
                 throw {
                     message: "Unknown type",
                     typeName: obj._type
                 };
-            ret = new typeInfo.prototype();
-            this.objecIds.set(ret, obj._byRef);
 
-
+            if (obj._byRef !== undefined) {
+                ret = new typeInfo.prototype();
+                this.objecIds.set(ret, obj._byRef);
+            }
+            else
+                ret = {};
         }
         else
             ret = {};
@@ -218,7 +229,9 @@ export class SyncClient extends EventEmitter {
                 ret[key] = this.deserializeFast(obj[key]);
         });
 
-
+        if (typeInfo && typeInfo.serializationInfo && typeInfo.serializationInfo.deserialize) {
+            ret = typeInfo.serializationInfo.deserialize(ret);
+        }
 
         return ret;
 
