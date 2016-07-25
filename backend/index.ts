@@ -1,4 +1,4 @@
-export {SyncClient} from "./Client";
-export {SyncServer} from "./Server";
+export {HyperjumpClient} from "./Client";
+export {HyperjumpServer} from "./Server";
 
 

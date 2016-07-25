@@ -5,6 +5,8 @@ export interface IFunctionDefinition {
     body: string;
 }
 
+export const ROOT_FUNCTION_GET_TYPE = 1;
+export const ROOT_FUNCTION_GET_OBJECT = 2;
 
 export interface ISerializationInfo {
     serialize: (obj: any) => any;

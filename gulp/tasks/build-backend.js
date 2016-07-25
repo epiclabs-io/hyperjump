@@ -29,7 +29,9 @@ gulp.task('build-backend', [], function() {
                        .pipe(ts(tsProject));
 
     tsResult.dts.pipe(gulp.dest("./dist"));
-    gulp.src("backend/modelsync.d.ts").pipe(gulp.dest("./dist"));
+    gulp.src("backend/ambient.d.ts").pipe(gulp.dest("./dist"));
+    gulp.src("package.json").pipe(gulp.dest("./dist"));
+    gulp.src("README.md").pipe(gulp.dest("./dist"));
     return tsResult.js
                     .pipe(sourcemaps.write('.', {includeContent: false, sourceRoot: function(file)
 						{

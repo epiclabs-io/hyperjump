@@ -1,1 +1,1 @@
-#Couchpillow - basic change control for Couchbase
+##Hyperjump -- Powerful and simple websockets-based RPC with events support

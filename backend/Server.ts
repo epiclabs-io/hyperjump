@@ -6,7 +6,7 @@ import * as Protocol from "./Protocol";
 
 const parseFunction = require("parse-function");
 
-var log = loglevel.getLogger("modelsync-server");
+var log = loglevel.getLogger("hyperjump-server");
 
 interface IObjectInfo {
     id: number,
@@ -21,7 +21,7 @@ export interface IContextInfo {
 
 
 
-function createRootClass(server: SyncServer): { new (): any } {
+function createRootClass(server: HyperjumpServer): { new (): any } {
 
     class Root {
 
@@ -50,12 +50,12 @@ function createRootClass(server: SyncServer): { new (): any } {
 const GC_TIMER = 60 * 1000;
 const GC_OBJECT_TIMEOUT = 5 * 60 * 1000;
 
-export class SyncServer extends events.EventEmitter {
+export class HyperjumpServer extends events.EventEmitter {
 
     private objects: WeakMap<any, IObjectInfo>;
     private functions = new Map<number, Function>();
     private types: WeakMap<Function, Protocol.ITypeInfo>;
-    public typesByName: Map<string, Protocol.ITypeInfo>;
+    private typesByName: Map<string, Protocol.ITypeInfo>;
     private objectIds: Map<number, IObjectInfo>;
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
@@ -96,10 +96,11 @@ export class SyncServer extends events.EventEmitter {
         let Root = createRootClass(this);
         this.root_ = new Root();
 
+
         this.registerType(Root, "Root");
         this.pin(this.root_); //id 0, keep forever
-        this.registerMethod(Root, "getType"); // func 1.
-        this.registerMethod(Root, "getObject"); // func 2.
+        this.registerMethod(Root, "getType"); // func 1. Protocol.ROOT_FUNCTION_GET_TYPE
+        this.registerMethod(Root, "getObject"); // func 2. Protocol.ROOT_FUNCTION_GET_OBJECT
         this.registerMethod(Root, "pingObjects");
         this.registerMethod(Root, "listen");
         this.registerMethod(Root, "unlisten");
@@ -453,16 +454,15 @@ interface IEventInfo {
 
 export class Agent {
 
-    private om: SyncServer;
+    private hjs: HyperjumpServer;
     private socket: WebSocket;
-    private sentObjects = new WeakSet();
     public id: number;
     private eventSubscriptions = new WeakMap<any, Set<string>>();
 
     private socket_message: Function;
 
-    constructor(om: SyncServer, socket: WebSocket, id: number) {
-        this.om = om;
+    constructor(hjs: HyperjumpServer, socket: WebSocket, id: number) {
+        this.hjs = hjs;
         this.socket = socket;
         this.id = id;
         this.socket.on("message", this.socket_message = (data: any, flags: any) => {
@@ -487,7 +487,7 @@ export class Agent {
     }
 
     private process_invoke(cmd: Protocol.IInvokeCommand) {
-        this.om.invokeFunction(cmd.functionId, cmd.thisArg, this, cmd.args).then(retVal => {
+        this.hjs.invokeFunction(cmd.functionId, cmd.thisArg, this, cmd.args).then(retVal => {
             let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,

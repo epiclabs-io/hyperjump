@@ -4,7 +4,7 @@ import {EventEmitter} from "./EventEmitter";
 
 var log = {
     log: function (type: string, st: string) {
-        console.log(`modelsync-client [${type}]: ${st}`);
+        console.log(`hyperjump-client [${type}]: ${st}`);
     },
     info: function (st: string) {
         this.log("INFO", st);
@@ -32,10 +32,10 @@ export interface IRemoteObjectInfo {
 
 const PING_OBJECTS_PERIOD = 60 * 1000;
 
-export class SyncClient extends EventEmitter {
+export class HyperjumpClient extends EventEmitter {
 
     private socket: WebSocket;
-    public root: any;
+    private root_: any;
     private objecIds = new WeakMap<any, number>();
     private typesByName = new Map<string, ILocalTypeInfo>();
     private types = new WeakMap<Function, ILocalTypeInfo>();
@@ -48,8 +48,9 @@ export class SyncClient extends EventEmitter {
 
         this.socket.onopen = async () => {
             console.log("socket open");
+            //obtain a reference to the root object
             let root = { _byRef: 0 };
-            this.root = await this.invokeRemoteFunction(2, root, [0] as any)
+            this.root_ = await this.invokeRemoteFunction(Protocol.ROOT_FUNCTION_GET_OBJECT, root, [0] as any)
             this.emit("root");
 
             this.schedulePing();
@@ -68,6 +69,10 @@ export class SyncClient extends EventEmitter {
 
     }
 
+    public get root(): any {
+        return this.root_;
+    }
+
     public registerTypeInfo(type: Function, typeInfo: ILocalTypeInfo) {
         this.types.set(type, typeInfo);
         this.typesByName.set(type.name, typeInfo);
@@ -75,7 +80,7 @@ export class SyncClient extends EventEmitter {
 
     private schedulePing() {
         setInterval(() => {
-            this.root.pingObjects([...this.tracklist.keys()]);
+            this.root_.pingObjects([...this.tracklist.keys()]);
 
         }, PING_OBJECTS_PERIOD);
     }
@@ -144,7 +149,7 @@ export class SyncClient extends EventEmitter {
             this.calls.set(this.idCall, { resolve: typeReceived, reject: typeNotFound });
             let cmd: Protocol.IInvokeCommand = {
                 command: "invoke",
-                functionId: 1, //getType
+                functionId: Protocol.ROOT_FUNCTION_GET_TYPE, //getType
                 callId: this.idCall,
                 thisArg: { _byRef: 0 }, //Root
                 args: [typeName],
@@ -373,7 +378,7 @@ export class SyncClient extends EventEmitter {
 
         handlers.add(listener);
         if (handlers.size == 1)
-            return this.root.listen(obj, eventName);
+            return this.root_.listen(obj, eventName);
         else
             return;
 
@@ -402,7 +407,7 @@ export class SyncClient extends EventEmitter {
         handlers.delete(listener);
 
         if (handlers.size == 0)
-            return this.root.unlisten(obj, eventName);
+            return this.root_.unlisten(obj, eventName);
         else
             return;
     }

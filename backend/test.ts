@@ -14,7 +14,7 @@ import * as errorHandler from "errorhandler";
 import * as methodOverride from "method-override";
 import * as http from "http";
 
-import * as om from "./index";
+import * as hj from "./index";
 
 
 var log = loglevel.getLogger("MAIN");
@@ -92,23 +92,23 @@ function main() {
     var model: Thing[] = [];
     var t = new Thing("blue", 4, new Person("Jay", 37));
 
-    var omServer = new om.SyncServer(httpServer, "/test");
+    var hjserver = new hj.HyperjumpServer(httpServer, "/test");
 
-    omServer.on("error", (error: string) => {
+    hjserver.on("error", (error: string) => {
         log.error("server Error: " + error);
     });
 
-    omServer.registerType(Thing, "Thing");
-    omServer.registerMethod(Thing, "speak");
-    omServer.registerMethod(Thing,"print");
-    omServer.root.t = t;
+    hjserver.registerType(Thing, "Thing");
+    hjserver.registerMethod(Thing, "speak");
+    hjserver.registerMethod(Thing,"print");
+    hjserver.root.t = t;
 
 
     setInterval(() => {
-        omServer.fireEvent(t, "tick", new Date());
+        hjserver.fireEvent(t, "tick", new Date());
     }, 1000);
 
-    omServer.registerMethodEx(omServer.constructor, function (a: number, b: number) {
+    hjserver.registerMethodEx(hjserver.constructor, function (a: number, b: number) {
         return a + b;
     }, "sum");
 
@@ -116,7 +116,7 @@ function main() {
     httpServer.listen(4000);
 
 
-    var c = new om.SyncClient(new WebSocket("http://localhost:4000/test"));
+    var c = new hj.HyperjumpClient(new WebSocket("http://localhost:4000/test"));
 
     c.on("root", async () => {
         console.log("Root!");
@@ -151,15 +151,6 @@ function main() {
 
 }
 
-async function produceNumber(): Promise<number> {
-
-    return new Promise<number>((resolve, reject) => {
-        setTimeout(() => {
-            resolve(5);
-        }, 1000);
-    });
-
-}
 
 main();
 
