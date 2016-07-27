@@ -26,8 +26,13 @@ interface IPromiseInfo {
     reject: (reason: any) => void;
 }
 
+export interface IHyperJumpEventHandler {
+    (source: any, ...args: any[]): void;
+}
+
 export interface IRemoteObjectInfo {
-    events: Map<string, Set<Function>>;
+    events: Map<string, Set<IHyperJumpEventHandler>>;
+    obj: any;
 }
 
 const PING_OBJECTS_PERIOD = 60 * 1000;
@@ -35,7 +40,7 @@ const PING_OBJECTS_PERIOD = 60 * 1000;
 export class HyperjumpClient extends EventEmitter {
 
     private socket: WebSocket;
-    private root_: any;
+    private root_: Protocol.IRoot
     private objecIds = new WeakMap<any, number>();
     private typesByName = new Map<string, ILocalTypeInfo>();
     private types = new WeakMap<Function, ILocalTypeInfo>();
@@ -69,7 +74,7 @@ export class HyperjumpClient extends EventEmitter {
 
     }
 
-    public get root(): any {
+    public get root(): Protocol.IRoot {
         return this.root_;
     }
 
@@ -222,9 +227,26 @@ export class HyperjumpClient extends EventEmitter {
                     typeName: obj._type
                 };
 
-            if (obj._byRef !== undefined) {
-                ret = new typeInfo.prototype();
-                this.objecIds.set(ret, obj._byRef);
+            if (typeInfo.prototype) {
+                if (obj._byRef !== undefined) {
+                    let trackedObjInfo = this.tracklist.get(obj._byRef);
+                    if (trackedObjInfo && trackedObjInfo.obj) {
+                        let trackedObj = trackedObjInfo.obj;
+                        let keys = Object.keys(trackedObj);
+                        keys.forEach(key => {
+                            delete trackedObj[key];
+                        });
+                        ret = trackedObj;
+                    }
+                    else
+                        ret = new typeInfo.prototype();
+
+                    this.objecIds.set(ret, obj._byRef);
+                }
+                else
+                    ret = new typeInfo.prototype();
+
+
             }
             else
                 ret = {};
@@ -286,11 +308,19 @@ export class HyperjumpClient extends EventEmitter {
             return;
 
         let objectInfo: IRemoteObjectInfo = this.tracklist.get(id);
-        let events: Map<string, Set<Function>>;
-        let handlers: Set<Function>;
+        if (!objectInfo) {
+            log.warn("Received event about untracked object id " + id);
+            return;
+        }
+
+        let sourceObj = objectInfo.obj;
+        let events: Map<string, Set<IHyperJumpEventHandler>>;
+        let handlers: Set<IHyperJumpEventHandler>;
+        let args = await this.deserialize(cmd.args);
+
         if (objectInfo && (events = objectInfo.events) && (handlers = events.get(cmd.eventName))) {
             handlers.forEach(async (handler) => {
-                handler.apply(null, await this.deserialize(cmd.args));
+                handler(sourceObj, ...args);
             })
         }
     }
@@ -346,7 +376,8 @@ export class HyperjumpClient extends EventEmitter {
         let objectInfo = this.tracklist.get(id);
         if (!objectInfo) {
             objectInfo = {
-                events: null
+                events: null,
+                obj: obj
             }
             this.tracklist.set(id, objectInfo);
         }
@@ -362,15 +393,15 @@ export class HyperjumpClient extends EventEmitter {
 
     }
 
-    public async listen(obj: any, eventName: string, listener: Function): Promise<void> {
+    public async listen(obj: any, eventName: string, listener: IHyperJumpEventHandler): Promise<void> {
         let objectInfo = this.track(obj);
         let events = objectInfo.events;
         if (!events) {
-            events = objectInfo.events = new Map<string, Set<Function>>();
+            events = objectInfo.events = new Map<string, Set<IHyperJumpEventHandler>>();
         }
         let handlers = events.get(eventName);
         if (!handlers) {
-            events.set(eventName, handlers = new Set<Function>());
+            events.set(eventName, handlers = new Set<IHyperJumpEventHandler>());
 
         }
         if (handlers.has(listener))
@@ -384,7 +415,7 @@ export class HyperjumpClient extends EventEmitter {
 
     }
 
-    public async unlisten(obj: any, eventName: string, listener: Function) {
+    public async unlisten(obj: any, eventName: string, listener: IHyperJumpEventHandler) {
         let id = this.objecIds.get(obj);
         if (id === undefined)
             return;
@@ -410,6 +441,18 @@ export class HyperjumpClient extends EventEmitter {
             return this.root_.unlisten(obj, eventName);
         else
             return;
+    }
+
+    public async refresh(obj: any) {
+        if (!this.root_) {
+            throw new Error("root not ready yet");
+        }
+
+        let id = this.objecIds.get(obj);
+        if (id === undefined)
+            throw new Error("can't refresh unknown object");
+
+        return this.root_.getObject(id);
     }
 
 }

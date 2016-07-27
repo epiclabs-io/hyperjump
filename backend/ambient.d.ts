@@ -36,16 +36,22 @@ declare module "hyperjump/client-browser/Client" {
             new (): any;
         };
     }
-    export interface IRemoteObjectInfo {
-        events: Map<string, Set<Function>>;
+    export interface IHyperJumpEventHandler {
+        (source: any, ...args: any[]): void;
     }
 
-    export interface IRoot{
-        getType(typeName: string): ITypeInfo;
-        getObject(id: number):any;
-        pingObjects(obj: any[]):void;
-        //listen(obj: any, eventName: string):void;
-        //unlisten(obj: any, eventName: string):void;
+    export interface IRemoteObjectInfo {
+        events: Map<string, Set<IHyperJumpEventHandler>>;
+        obj: any;
+    }
+
+    export interface IRoot {
+        getType(typeName: string): Promise<ITypeInfo>;
+        getObject(nameOrId: number|string): Promise<any>;
+        pingObjects(obj: any[]): Promise<void>;
+       
+        //listen(obj: any, eventName: string):Promise<void>;
+        //unlisten(obj: any, eventName: string):Promise<void>;
     }
 
     export class HyperjumpClient extends EventEmitter {

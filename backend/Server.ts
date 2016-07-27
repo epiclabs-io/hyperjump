@@ -28,9 +28,6 @@ function createRootClass(server: HyperjumpServer): { new (): any } {
         public getType(typeName: string): Protocol.ITypeInfo {
             return server.getType(typeName);
         }
-        public getObject(id: number) {
-            return server.getObject(id);
-        }
         public pingObjects(obj: any[]) {
         }
 
@@ -40,6 +37,13 @@ function createRootClass(server: HyperjumpServer): { new (): any } {
 
         public unlisten(obj: any, eventName: string) {
             return server.unlisten(obj, eventName);
+        }
+        public getObject(nameOrId: string | number) {
+
+            if (typeof nameOrId === "number")
+                return server.getObjectById(nameOrId);
+            else
+                return server.getObjectByName(nameOrId);
         }
     }
     return Root;
@@ -57,6 +61,7 @@ export class HyperjumpServer extends events.EventEmitter {
     private types: WeakMap<Function, Protocol.ITypeInfo>;
     private typesByName: Map<string, Protocol.ITypeInfo>;
     private objectIds: Map<number, IObjectInfo>;
+    private objectsByName = new Map<string, any>();
     private objectCounter: number = 0;
     private agents: Map<number, Agent>;
     private root_: any;
@@ -97,13 +102,15 @@ export class HyperjumpServer extends events.EventEmitter {
         this.root_ = new Root();
 
 
-        this.registerType(Root, "Root");
+        this.registerType(Root, "Root"); //root is always alive.
+
         this.pin(this.root_); //id 0, keep forever
         this.registerMethod(Root, "getType"); // func 1. Protocol.ROOT_FUNCTION_GET_TYPE
         this.registerMethod(Root, "getObject"); // func 2. Protocol.ROOT_FUNCTION_GET_OBJECT
         this.registerMethod(Root, "pingObjects");
         this.registerMethod(Root, "listen");
         this.registerMethod(Root, "unlisten");
+
 
         this.registerTypeInfo(Date, Protocol.DateTypeInfo);
 
@@ -124,16 +131,32 @@ export class HyperjumpServer extends events.EventEmitter {
         return this.typesByName.get(typeName);
     }
 
-    public getObject(id: number) {
-        let obj = this.objectIds.get(id).obj;
+    public getObjectById(id: number) {
+        let objInfo = this.objectIds.get(id);
+
+        if (!objInfo)
+            return null;
+
+        let obj = objInfo.obj;
         if (!obj)
             return null;
 
         this.pingObject(obj);
         return obj;
     }
+
     public pingObject(obj: any) {
         this.getObjectInfo(obj);
+    }
+
+    public removeObject(obj: any) {
+        let objectInfo = this.objects.get(obj);
+        if (!objectInfo)
+            return;
+
+        this.objects.delete(obj);
+        this.objectIds.delete(objectInfo.id);
+
     }
 
     public pin(obj: any) {
@@ -259,6 +282,11 @@ export class HyperjumpServer extends events.EventEmitter {
 
     }
 
+    public registerObject(obj: any, name: string) {
+        this.pin(obj);
+        this.objectsByName.set(name, obj);
+    }
+
     public createGenericType(name: string): { new (): any } {
         let type = function () { };
         this.registerType(type, name);
@@ -342,13 +370,17 @@ export class HyperjumpServer extends events.EventEmitter {
     public getObjectByRef(obj: any | Protocol.IByRef): any {
 
         if (obj._byRef != undefined) {
-            let ret = this.getObject(obj._byRef);
+            let ret = this.getObjectById(obj._byRef);
             if (!ret)
                 throw new Error(`Unknown reference to object with id ${obj._byRef}`);
             return ret;
         }
 
         return obj;
+    }
+
+    public getObjectByName(name: string): any {
+        return this.objectsByName.get(name);
     }
 
 

@@ -101,7 +101,7 @@ function main() {
     hjserver.registerType(Thing, "Thing");
     hjserver.registerMethod(Thing, "speak");
     hjserver.registerMethod(Thing,"print");
-    hjserver.root.t = t;
+    hjserver.registerObject(t, "testobj");
 
 
     setInterval(() => {
@@ -121,25 +121,29 @@ function main() {
     c.on("root", async () => {
         console.log("Root!");
 
-        let ret = await c.root.t.speak("perry");
+        let t = await c.root.getObject("testobj");
+
+        let ret = await t.speak("perry");
 
         let count = 0;
-        let listener = (val:any) => {
+        let listener = (source:any, val:any) => {
             console.log("tick " + val);
             count++;
             if (count == 2) {
-                c.unlisten(c.root.t, "tick", listener);
+                c.unlisten(t, "tick", listener);
             }
         }
-        c.listen(c.root.t, "tick", listener);
+        c.listen(t, "tick", listener);
+
+        await c.refresh(t);
 
         console.log(ret);
     });
 
     setTimeout(async () => {
 
-        await c.root.t.print("Hola");
-        await c.root.t.print(new Date());
+        await t.print("Hola");
+        await t.print(new Date());
 
     }, 4000);
 

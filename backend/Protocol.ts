@@ -31,7 +31,13 @@ export interface IByRef {
 export interface ICommand {
     command: string,
 }
-
+export interface IRoot {
+    getType(typeName: string): Promise<ITypeInfo>;
+    pingObjects(obj: any[]): Promise<void>;
+    getObject(nameOrId: string|number): Promise<any>;
+    listen(obj: any, eventName: string): Promise<void>;
+    unlisten(obj: any, eventName: string): Promise<void>;
+}
 export interface IInvokeCommand extends ICommand {
     functionId: number,
     callId: number,
