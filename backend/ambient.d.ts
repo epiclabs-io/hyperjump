@@ -1,5 +1,5 @@
 
-declare module "hyperjump" {
+declare module "hyperjump/client-browser/Client" {
 
     class EventEmitter {
         private listeners;
