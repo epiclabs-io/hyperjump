@@ -219,6 +219,7 @@ export class HyperjumpClient extends EventEmitter {
 
         let ret: any;
         let typeInfo: ILocalTypeInfo;
+        
         if (obj._type) {
             typeInfo = this.typesByName.get(obj._type);
             if (typeInfo == undefined)
@@ -231,6 +232,10 @@ export class HyperjumpClient extends EventEmitter {
                 if (obj._byRef !== undefined) {
                     let trackedObjInfo = this.tracklist.get(obj._byRef);
                     if (trackedObjInfo && trackedObjInfo.obj) {
+                        //this is a tracked object. We want to update its content without creating a new
+                        //Javascript object, so we strip all properties and let the block below copy the
+                        //new values.
+                        
                         let trackedObj = trackedObjInfo.obj;
                         let keys = Object.keys(trackedObj);
                         keys.forEach(key => {
@@ -245,8 +250,6 @@ export class HyperjumpClient extends EventEmitter {
                 }
                 else
                     ret = new typeInfo.prototype();
-
-
             }
             else
                 ret = {};

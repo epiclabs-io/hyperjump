@@ -165,9 +165,9 @@ export class HyperjumpServer extends events.EventEmitter {
 
     private removeAgent(agent: Agent) {
         agent.terminate();
-        this.objectIds.forEach(meta => {
-            if (meta.events) {
-                meta.events.forEach(event => {
+        this.objectIds.forEach(objInfo => {
+            if (objInfo.events) {
+                objInfo.events.forEach(event => {
                     event.delete(agent);
                 })
             }
@@ -322,8 +322,8 @@ export class HyperjumpServer extends events.EventEmitter {
         if (type) {
             ret._type = type.name;
             if (type.isByRef) {
-                let metadata = this.getObjectInfo(obj);
-                ret._byRef = metadata.id;
+                let objInfo = this.getObjectInfo(obj);
+                ret._byRef = objInfo.id;
             }
         }
 
@@ -430,12 +430,12 @@ export class HyperjumpServer extends events.EventEmitter {
         if (!agent)
             throw new Error("no current context calling listen()");
 
-        let meta = this.getObjectInfo(obj);
-        if (!meta.events)
-            meta.events = new Map<string, Set<Agent>>();
-        let agents = meta.events.get(eventName);
+        let objInfo = this.getObjectInfo(obj);
+        if (!objInfo.events)
+            objInfo.events = new Map<string, Set<Agent>>();
+        let agents = objInfo.events.get(eventName);
         if (!agents)
-            meta.events.set(eventName, agents = new Set<Agent>());
+            objInfo.events.set(eventName, agents = new Set<Agent>());
         agents.add(agent);
     }
 
@@ -444,11 +444,11 @@ export class HyperjumpServer extends events.EventEmitter {
         if (!agent)
             throw new Error("no current context calling unlisten()");
 
-        let meta = this.getObjectInfo(obj);
-        if (!meta.events)
+        let objInfo = this.getObjectInfo(obj);
+        if (!objInfo.events)
             return;
 
-        let agents = meta.events.get(eventName);
+        let agents = objInfo.events.get(eventName);
         if (!agents)
             return;
 
@@ -457,12 +457,12 @@ export class HyperjumpServer extends events.EventEmitter {
     }
 
     public fireEvent(sourceObj: any, eventName: string, ...args: any[]) {
-        let meta = this.getObjectInfo(sourceObj);
-        if (meta.events) {
-            let event = meta.events.get(eventName);
+        let objInfo = this.getObjectInfo(sourceObj);
+        if (objInfo.events) {
+            let event = objInfo.events.get(eventName);
             if (event) {
                 event.forEach(agent => {
-                    agent.notifyEventFired(meta.id, eventName, this.serialize(args));
+                    agent.notifyEventFired(objInfo.id, eventName, this.serialize(args));
                 });
             }
         }
@@ -470,10 +470,11 @@ export class HyperjumpServer extends events.EventEmitter {
 
     public gc() {
         let now = (new Date()).getTime();
-        for (let [id, meta] of this.objectIds) {
-            if (meta.lastPing !== -1) {
-                if (now - meta.lastPing > GC_OBJECT_TIMEOUT) {
+        for (let [id, objInfo] of this.objectIds) {
+            if (objInfo.lastPing !== -1) {
+                if (now - objInfo.lastPing > GC_OBJECT_TIMEOUT) {
                     this.objectIds.delete(id);
+                    this.objects.delete(objInfo.obj);
                 }
             }
         }
