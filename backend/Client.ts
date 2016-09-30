@@ -481,7 +481,7 @@ export class HyperjumpClient extends EventEmitter {
 
     }
 
-    public async unlisten(obj: any, eventName: string, listener: IHyperJumpEventHandler) {
+    public async unlisten(obj: any, eventName?: string, listener?: IHyperJumpEventHandler) {
         let id = this.objecIds.get(obj);
         if (id === undefined)
             return;
@@ -494,15 +494,29 @@ export class HyperjumpClient extends EventEmitter {
         if (!events) {
             return;
         }
+
+        if (eventName === undefined) {
+            for (let eventName of events.keys()) {
+                this.root_.unlisten(obj, eventName);
+            }
+            events.clear();
+            return;
+        }
+
         let handlers = events.get(eventName);
         if (!handlers) {
             return;
         }
-        if (!handlers.has(listener))
-            return;
 
-        handlers.delete(listener);
+        if (listener === undefined) {
+            handlers.clear();
+        }
+        else {
+            if (!handlers.has(listener))
+                return;
 
+            handlers.delete(listener);
+        }
         if (handlers.size == 0)
             return this.root_.unlisten(obj, eventName);
         else

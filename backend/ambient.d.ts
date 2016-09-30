@@ -61,6 +61,6 @@ declare module "hyperjump/client-browser/Client" {
         track(obj: any): IRemoteObjectInfo;
         untrack(obj: any): void;
         listen(obj: any, eventName: string, listener: IHyperJumpEventHandler): Promise<void>;
-        unlisten(obj: any, eventName: string, listener: IHyperJumpEventHandler): Promise<any>;
+        unlisten(obj: any, eventName?: string, listener?: IHyperJumpEventHandler): Promise<any>;
     }
 }
