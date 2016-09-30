@@ -8,6 +8,13 @@ export interface IFunctionDefinition {
 export const ROOT_FUNCTION_GET_TYPE = 1;
 export const ROOT_FUNCTION_GET_OBJECT = 2;
 
+export enum RefType {
+    VALUE, // type is passed by value
+    REFVALUE, //type is passed by reference, alongside a snapshot of properties
+    REFONLY // type is passed by reference without properties
+}
+
+
 export interface ISerializationInfo {
     serialize: (obj: any) => any;
     deserialize: (obj: any) => any;
@@ -20,7 +27,7 @@ export interface ITypeInfo {
     methods: { [methodName: string]: number };
     clientMethods: { [methodName: string]: IFunctionDefinition };
     serializationInfo?: ISerializationInfo;
-    isByRef: boolean;
+    referenceType: RefType;
 }
 
 export interface IByRef {
@@ -59,11 +66,16 @@ export interface IEventFiredCommand extends ICommand {
     args: any[]
 }
 
+export interface IBinaryDataHeaderCommand extends ICommand {
+    id:number,
+    length:number
+}
+
 export var DateTypeInfo: ITypeInfo = {
     name: "Date",
     methods: null,
     clientMethods: null,
-    isByRef: false,
+    referenceType: RefType.VALUE,
     serializationInfo: {
         serialize: (obj: any): any => {
             return { time: (obj as Date).getTime() };

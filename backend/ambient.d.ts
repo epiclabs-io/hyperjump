@@ -60,7 +60,7 @@ declare module "hyperjump/client-browser/Client" {
         registerTypeInfo(type: Function, typeInfo: ILocalTypeInfo): void;
         track(obj: any): IRemoteObjectInfo;
         untrack(obj: any): void;
-        listen(obj: any, eventName: string, listener: Function): Promise<void>;
-        unlisten(obj: any, eventName: string, listener: Function): Promise<any>;
+        listen(obj: any, eventName: string, listener: IHyperJumpEventHandler): Promise<void>;
+        unlisten(obj: any, eventName: string, listener: IHyperJumpEventHandler): Promise<any>;
     }
 }

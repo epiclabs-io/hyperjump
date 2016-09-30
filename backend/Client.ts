@@ -46,10 +46,13 @@ export class HyperjumpClient extends EventEmitter {
     private types = new WeakMap<Function, ILocalTypeInfo>();
     private calls = new Map<number, IPromiseInfo>();
     private tracklist = new Map<number, IRemoteObjectInfo>();
+    private binaryBufferList = new Map<number, ArrayBuffer>();
+    private nextBinaryDataHeaderCommand: Protocol.IBinaryDataHeaderCommand;
 
     constructor(socket: any) {
         super();
         this.socket = socket;
+        this.socket.binaryType = "arraybuffer";
 
         this.socket.onopen = async () => {
             console.log("socket open");
@@ -63,7 +66,22 @@ export class HyperjumpClient extends EventEmitter {
         };
 
         this.socket.onmessage = (event) => {
-            this.processMessage(JSON.parse(event.data));
+            if (typeof event.data === "string")
+                this.processMessage(JSON.parse(event.data));
+            else { //binary data
+                if (!this.nextBinaryDataHeaderCommand) {
+                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received without header");
+                    return;
+                }
+                let buf = event.data as ArrayBuffer;
+                if (buf.byteLength != this.nextBinaryDataHeaderCommand.length) {
+                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received length mismatch");
+                    return;
+                }
+
+                this.binaryBufferList.set(this.nextBinaryDataHeaderCommand.id, buf);
+                this.nextBinaryDataHeaderCommand = undefined;
+            }
         };
 
         this.socket.onerror = (ev) => {
@@ -96,6 +114,7 @@ export class HyperjumpClient extends EventEmitter {
         switch (cmd.command) {
             case "result": this.process_result(cmd as Protocol.IInvokeResultCommand); break;
             case "event": this.process_event(cmd as Protocol.IEventFiredCommand); break;
+            case "buffer": this.process_buffer(cmd as Protocol.IBinaryDataHeaderCommand); break;
             default: {
                 log.warn("Unknown cmd type " + cmd.command);
             }
@@ -176,6 +195,16 @@ export class HyperjumpClient extends EventEmitter {
             return arr;
         }
 
+        if (obj instanceof ArrayBuffer) {
+
+            let id = this.sendBuffer(obj as ArrayBuffer);
+
+            return {
+                _type: "Buffer",
+                id: id
+            }
+        }
+
         if (typeof obj !== "object" || obj == null || obj == undefined)
             return obj; //primitive type
 
@@ -219,8 +248,19 @@ export class HyperjumpClient extends EventEmitter {
 
         let ret: any;
         let typeInfo: ILocalTypeInfo;
-        
+
         if (obj._type) {
+
+            if (obj._type === "Buffer") {
+                let buf = this.binaryBufferList.get(obj.id);
+                if (!buf) {
+                    console.error(`HYPERJUMP PROTOCOL ERROR: Can't retrieve buffer with id ${obj.id}`);
+                    return;
+                }
+                this.binaryBufferList.delete(obj.id);
+                return buf;
+            }
+
             typeInfo = this.typesByName.get(obj._type);
             if (typeInfo == undefined)
                 throw {
@@ -235,7 +275,7 @@ export class HyperjumpClient extends EventEmitter {
                         //this is a tracked object. We want to update its content without creating a new
                         //Javascript object, so we strip all properties and let the block below copy the
                         //new values.
-                        
+
                         let trackedObj = trackedObjInfo.obj;
                         let keys = Object.keys(trackedObj);
                         keys.forEach(key => {
@@ -328,6 +368,15 @@ export class HyperjumpClient extends EventEmitter {
         }
     }
 
+    private async process_buffer(cmd: Protocol.IBinaryDataHeaderCommand) {
+        if (this.nextBinaryDataHeaderCommand) {
+            console.error("HYPERJUMP PROTOCOL ERROR: new binary data header received before receiving binary data");
+            return;
+        }
+
+        this.nextBinaryDataHeaderCommand = cmd;
+    }
+
     private generateProxyFunction(id: number) {
         let self = this;
         return function () {
@@ -367,8 +416,22 @@ export class HyperjumpClient extends EventEmitter {
         });
     }
 
+    private bufferId = 0;
     private send(data: any) {
         this.socket.send(JSON.stringify(data));
+    }
+
+    private sendBuffer(buf: ArrayBuffer) {
+        let id = this.bufferId++;
+        this.send({
+            command: "buffer",
+            id: id,
+            length: buf.byteLength
+        } as Protocol.IBinaryDataHeaderCommand);
+
+        this.socket.send(buf);
+
+        return id;
     }
 
     public track(obj: any): IRemoteObjectInfo {

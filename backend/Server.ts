@@ -8,7 +8,7 @@ const parseFunction = require("parse-function");
 
 var log = loglevel.getLogger("hyperjump-server");
 
-interface IObjectInfo {
+export interface IObjectInfo {
     id: number,
     lastPing: number,
     obj: any,
@@ -182,7 +182,7 @@ export class HyperjumpServer extends events.EventEmitter {
             return this.types.get(obj.constructor);
     }
 
-    private getObjectInfo(obj: any): IObjectInfo {
+    public getObjectInfo(obj: any): IObjectInfo {
 
         if (!this.getTypeInfo(obj)) {
             throw new Error("can't get object info from a non-object or unregistered type");
@@ -212,7 +212,7 @@ export class HyperjumpServer extends events.EventEmitter {
         this.typesByName.set(typeInfo.name, typeInfo);
     }
 
-    public registerType(type: Function, name?: string, isByRef: boolean = true): Protocol.ITypeInfo {
+    public registerType(type: Function, name?: string, referenceType: Protocol.RefType = Protocol.RefType.REFVALUE): Protocol.ITypeInfo {
         let typeInfo = this.types.get(type);
         if (typeInfo)
             throw new Error(`Type ${typeInfo.name} already registered`);
@@ -221,7 +221,7 @@ export class HyperjumpServer extends events.EventEmitter {
             name: name || type.name,
             methods: {},
             clientMethods: {},
-            isByRef: isByRef
+            referenceType: referenceType
         }
 
         this.registerTypeInfo(type, typeInfo);
@@ -293,80 +293,6 @@ export class HyperjumpServer extends events.EventEmitter {
         return type as any;
     }
 
-    public serialize(obj: any): any {
-
-        if (Array.isArray(obj)) {
-            let arr: any[] = [];
-            (obj as any[]).forEach(element => {
-                arr.push(this.serialize(element));
-            });
-            return arr;
-        }
-
-        if (typeof obj !== "object" || obj == null || obj == undefined)
-            return obj; //primitive type
-
-        let type = this.getTypeInfo(obj);
-
-        if (type && type.serializationInfo && type.serializationInfo.serialize) {
-            obj = type.serializationInfo.serialize(obj);
-        }
-
-        let ret: any = {};
-
-        let keys = Object.keys(obj);
-        keys.forEach(key => {
-            ret[key] = this.serialize(obj[key]);
-        });
-
-        if (type) {
-            ret._type = type.name;
-            if (type.isByRef) {
-                let objInfo = this.getObjectInfo(obj);
-                ret._byRef = objInfo.id;
-            }
-        }
-
-        return ret;
-
-    }
-
-    public deserialize(obj: any): any {
-
-        if (Array.isArray(obj)) {
-            let arr: any[] = [];
-            (obj as any[]).forEach(element => {
-                arr.push(this.deserialize(element));
-            });
-            return arr;
-        }
-
-        if (typeof obj !== "object" || obj == null || obj == undefined)
-            return obj; //primitive type
-
-        if ((obj as Protocol.IByRef)._byRef !== undefined) {
-            return this.getObjectByRef(obj);
-        }
-
-        let ret: any = {};
-
-        let keys = Object.keys(obj);
-        keys.forEach(key => {
-            if (key != "_type")
-                ret[key] = this.deserialize(obj[key]);
-        });
-
-        let type: Protocol.ITypeInfo;
-        if (obj._type && (type = this.typesByName.get(obj._type)) && !type.isByRef &&
-            type.serializationInfo && type.serializationInfo.deserialize) {
-
-            ret = type.serializationInfo.deserialize(ret);
-        }
-
-        return ret;
-
-    }
-
     public getObjectByRef(obj: any | Protocol.IByRef): any {
 
         if (obj._byRef != undefined) {
@@ -384,30 +310,12 @@ export class HyperjumpServer extends events.EventEmitter {
     }
 
 
-    public invokeFunction(id: number, thisArg: any, agent: Agent, args: any[]) {
+    public invokeFunction(id: number, thisObj: any, agent: Agent, args: any[]) {
         return new Promise<any>((resolve, reject) => {
             let func = this.functions.get(id);
             if (!func) {
                 reject(new Error(`can't find function with id ${id}`));
                 return;
-            }
-            let thisObj: any;
-            try {
-                thisObj = this.deserialize(thisArg);
-                if (typeof thisObj != "object" || !thisObj)
-                    throw new Error("thisArg is not an object");
-            }
-            catch (e) {
-                reject(e);
-            }
-
-            try {
-                for (let i = 0; i < args.length; i++) {
-                    args[i] = this.deserialize(args[i]);
-                }
-            }
-            catch (e) {
-                reject(e);
             }
 
             try {
@@ -415,7 +323,7 @@ export class HyperjumpServer extends events.EventEmitter {
                 let retval = func.apply(thisObj, args);
                 this.currentContext_ = null;
                 Promise.resolve(retval).then((value) => {
-                    resolve(this.serialize(value));
+                    resolve(value);
                 });
             }
             catch (e) {
@@ -462,7 +370,7 @@ export class HyperjumpServer extends events.EventEmitter {
             let event = objInfo.events.get(eventName);
             if (event) {
                 event.forEach(agent => {
-                    agent.notifyEventFired(objInfo.id, eventName, this.serialize(args));
+                    agent.notifyEventFired(objInfo.id, eventName, args);
                 });
             }
         }
@@ -479,6 +387,10 @@ export class HyperjumpServer extends events.EventEmitter {
             }
         }
     }
+
+    public getTypeByName(name: string): Protocol.ITypeInfo {
+        return this.typesByName.get(name);
+    }
 }
 
 interface IEventInfo {
@@ -491,6 +403,8 @@ export class Agent {
     private socket: WebSocket;
     public id: number;
     private eventSubscriptions = new WeakMap<any, Set<string>>();
+    private binaryBufferList = new Map<number, Buffer>();
+    private nextBinaryDataHeaderCommand: Protocol.IBinaryDataHeaderCommand;
 
     private socket_message: Function;
 
@@ -498,8 +412,23 @@ export class Agent {
         this.hjs = hjs;
         this.socket = socket;
         this.id = id;
-        this.socket.on("message", this.socket_message = (data: any, flags: any) => {
-            this.processMessage(JSON.parse(data));
+        this.socket.on("message", this.socket_message = (data: any, flags: { binary: boolean }) => {
+            if (!flags.binary)
+                this.processMessage(JSON.parse(data));
+            else {
+                if (!this.nextBinaryDataHeaderCommand) {
+                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received without header");
+                    return;
+                }
+                let buf = data as Buffer;
+                if (buf.byteLength != this.nextBinaryDataHeaderCommand.length) {
+                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received length mismatch");
+                    return;
+                }
+                //TODO: Limit how much data is pending in binaryBufferList
+                this.binaryBufferList.set(this.nextBinaryDataHeaderCommand.id, buf);
+                this.nextBinaryDataHeaderCommand = undefined;
+            }
         })
     }
 
@@ -520,11 +449,34 @@ export class Agent {
     }
 
     private process_invoke(cmd: Protocol.IInvokeCommand) {
-        this.hjs.invokeFunction(cmd.functionId, cmd.thisArg, this, cmd.args).then(retVal => {
+
+        let thisObj: any;
+        let args: any[] = cmd.args;
+        try {
+            thisObj = this.deserialize(cmd.thisArg);
+            if (typeof thisObj != "object" || !thisObj)
+                throw new Error("thisArg is not an object");
+
+            for (let i = 0; i < args.length; i++) {
+                args[i] = this.deserialize(args[i]);
+            }
+        }
+        catch (e) {
             let rcmd: Protocol.IInvokeResultCommand = {
                 command: "result",
                 callId: cmd.callId,
-                result: retVal,
+                result: null,
+                status: 1,
+                message: e
+            }
+            this.send(rcmd);
+        }
+
+        this.hjs.invokeFunction(cmd.functionId, thisObj, this, args).then(retVal => {
+            let rcmd: Protocol.IInvokeResultCommand = {
+                command: "result",
+                callId: cmd.callId,
+                result: this.serialize(retVal),
                 status: 0,
                 message: "OK"
             }
@@ -541,15 +493,122 @@ export class Agent {
         })
     }
 
+
+    public serialize(obj: any): any {
+
+        if (Array.isArray(obj)) {
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.serialize(element));
+            });
+            return arr;
+        }
+
+        if (Buffer.isBuffer(obj)) {
+
+            let id = this.sendBuffer(obj as Buffer);
+
+            return {
+                _type: "Buffer",
+                id: id
+            }
+        }
+
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        let type = this.hjs.getTypeInfo(obj);
+
+        let originalObject = obj;
+
+        if (type) {
+            if (type.referenceType == Protocol.RefType.REFONLY)
+                obj = {};
+            else {
+                if (type.serializationInfo && type.serializationInfo.serialize) {
+                    obj = type.serializationInfo.serialize(obj);
+                }
+            }
+        }
+
+        let ret: any = {};
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            ret[key] = this.serialize(obj[key]);
+        });
+
+
+        if (type) {
+            ret._type = type.name;
+            if (type.referenceType == Protocol.RefType.REFVALUE || type.referenceType == Protocol.RefType.REFONLY) {
+                let objInfo = this.hjs.getObjectInfo(originalObject);
+                ret._byRef = objInfo.id;
+            }
+        }
+
+        return ret;
+
+    }
+
+    public deserialize(obj: any): any {
+
+        if (Array.isArray(obj)) {
+            let arr: any[] = [];
+            (obj as any[]).forEach(element => {
+                arr.push(this.deserialize(element));
+            });
+            return arr;
+        }
+
+        if (typeof obj !== "object" || obj == null || obj == undefined)
+            return obj; //primitive type
+
+        if ((obj as Protocol.IByRef)._byRef !== undefined) {
+            return this.hjs.getObjectByRef(obj);
+        }
+
+        let ret: any = {};
+
+        let keys = Object.keys(obj);
+        keys.forEach(key => {
+            if (key != "_type")
+                ret[key] = this.deserialize(obj[key]);
+        });
+
+        let type: Protocol.ITypeInfo;
+        if (obj._type && (type = this.hjs.getTypeByName(obj._type)) && (type.referenceType == Protocol.RefType.REFVALUE) &&
+            type.serializationInfo && type.serializationInfo.deserialize) {
+
+            ret = type.serializationInfo.deserialize(ret);
+        }
+
+        return ret;
+
+    }
+
+    private bufferId = 0;
     private send(data: any) {
         this.socket.send(JSON.stringify(data));
+    }
+
+    private sendBuffer(buf: Buffer) {
+        let id = this.bufferId++;
+        this.send({
+            command: "buffer",
+            id: id,
+            length: buf.byteLength
+        } as Protocol.IBinaryDataHeaderCommand);
+
+        this.socket.send(buf, { binary: true });
+
+        return id;
     }
 
     public notifyEventFired(sourceObjectId: number, eventName: string, args: any[]) {
         this.send({
             command: "event",
             eventName: eventName,
-            args: args,
+            args: this.serialize(args),
             sourceObjectId: sourceObjectId
         } as Protocol.IEventFiredCommand)
     }
