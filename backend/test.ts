@@ -63,6 +63,21 @@ class Thing {
 
     public print(st: any) {
         console.log("print any:" + st);
+
+        if (st instanceof Map) {
+            let m = st as Map<string, any>;
+            m.forEach((value, key) => {
+                console.log("key: " + key + ", value=" + value);
+            })
+
+        }
+    }
+
+    public getMap() {
+        let x = new Map();
+        x.set(55, "qué tal");
+        x.set(4, { color: "blue" });
+        return x;
     }
 
 
@@ -101,7 +116,10 @@ function main() {
     hjserver.registerType(Thing, "Thing");
     hjserver.registerMethod(Thing, "speak");
     hjserver.registerMethod(Thing, "print");
+    hjserver.registerMethod(Thing, "getMap");
     hjserver.registerObject(t, "testobj");
+
+    hjserver.root.color="green";
 
 
     setInterval(() => {
@@ -123,6 +141,7 @@ function main() {
 
     c.on("ready", async () => {
         console.log("Root!");
+        console.log((c.root as any).color);
 
         let t = await c.root.getObject("testobj");
 
@@ -145,8 +164,18 @@ function main() {
 
     setTimeout(async () => {
 
+        let t = await c.root.getObject("testobj");
+
         await t.print("Hola");
         await t.print(new Date());
+        let y = await t.getMap();
+
+        let x = new Map();
+        x.set(1, "hola");
+        x.set(2, { color: "red" });
+
+        await t.print(x);
+        await t.print(y);
 
     }, 4000);
 

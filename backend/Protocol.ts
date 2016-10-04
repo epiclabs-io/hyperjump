@@ -37,12 +37,12 @@ export interface IByRef {
 
 export interface ICommand {
     command: string,
-    debugInfo?:string
+    debugInfo?: string
 }
 export interface IRoot {
     getType(typeName: string): Promise<ITypeInfo>;
     pingObjects(obj: any[]): Promise<void>;
-    getObject(nameOrId: string|number): Promise<any>;
+    getObject(nameOrId: string | number): Promise<any>;
     listen(obj: any, eventName: string): Promise<void>;
     unlisten(obj: any, eventName: string): Promise<void>;
 }
@@ -68,8 +68,8 @@ export interface IEventFiredCommand extends ICommand {
 }
 
 export interface IBinaryDataHeaderCommand extends ICommand {
-    id:number,
-    length:number
+    id: number,
+    length: number
 }
 
 export var DateTypeInfo: ITypeInfo = {
@@ -88,4 +88,33 @@ export var DateTypeInfo: ITypeInfo = {
         deserializerDef: null
     }
 
+}
+
+export var MapTypeInfo: ITypeInfo = {
+    name: "Map",
+    methods: null,
+    clientMethods: null,
+    referenceType: RefType.VALUE,
+
+    serializationInfo: {
+        serialize: (obj: any): any => {
+
+            let m = {};
+            let map = obj as Map<string | number, any>;
+            map.forEach((value, key) => {
+                m[key] = value;
+            });
+            return m;
+
+        },
+        deserialize: (obj: any): any => {
+            let map = new Map<any, any>();
+            Object.keys(obj).forEach(key => {
+                map.set(key, obj[key]);
+            });
+            return map;
+        },
+        serializerDef: null,
+        deserializerDef: null
+    }
 }

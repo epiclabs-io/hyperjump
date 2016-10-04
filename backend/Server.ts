@@ -113,6 +113,7 @@ export class HyperjumpServer extends events.EventEmitter {
 
 
         this.registerTypeInfo(Date, Protocol.DateTypeInfo);
+        this.registerTypeInfo(Map, Protocol.MapTypeInfo);
 
 
         setInterval(() => {
@@ -243,6 +244,11 @@ export class HyperjumpServer extends events.EventEmitter {
     public registerMethod(type: Function, name: string) {
         this.registerMethodEx(type, type.prototype[name], name);
     }
+    public registerMethods(type: Function, methodNames: string[]) {
+        methodNames.forEach(name => {
+            this.registerMethod(type, name);
+        });
+    }
 
     public registerClientMethodEx(type: Function, func: Function | string, name: string) {
         let parsed = parseFunction(func);
@@ -259,6 +265,12 @@ export class HyperjumpServer extends events.EventEmitter {
 
     public registerClientMethod(type: Function, name: string) {
         this.registerClientMethodEx(type, type.prototype[name], name);
+    }
+
+    public registerClientMethods(type: Function, methodNames: string[]) {
+        methodNames.forEach(name => {
+            this.registerClientMethod(type, name);
+        });
     }
 
     public registerFunction(func: Function): number {
@@ -576,7 +588,9 @@ export class Agent {
         });
 
         let type: Protocol.ITypeInfo;
-        if (obj._type && (type = this.hjs.getTypeByName(obj._type)) && (type.referenceType == Protocol.RefType.REFVALUE) &&
+        if (obj._type &&
+            (type = this.hjs.getTypeByName(obj._type)) &&
+            (type.referenceType !== Protocol.RefType.REFONLY) &&
             type.serializationInfo && type.serializationInfo.deserialize) {
 
             ret = type.serializationInfo.deserialize(ret);

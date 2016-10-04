@@ -21,6 +21,16 @@ export interface IRemoteObjectInfo {
     obj: any;
 }
 
+// hack to use either the native browser WebSocket or nodejs' ws.
+var WebSocketClass: any;
+try {
+    WebSocketClass = WebSocket;
+}
+catch (e) { }
+
+if (WebSocketClass === undefined) 
+    WebSocketClass = require("ws");
+
 const PING_OBJECTS_PERIOD = 60 * 1000;
 
 export class HyperjumpClient extends EventEmitter {
@@ -59,6 +69,7 @@ export class HyperjumpClient extends EventEmitter {
     constructor() {
         super();
         this.registerTypeInfo(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
+        this.registerTypeInfo(Map,Protocol.MapTypeInfo as ILocalTypeInfo);
     }
 
     get loglevel() {
@@ -75,7 +86,8 @@ export class HyperjumpClient extends EventEmitter {
     }
 
     public connect(url: string) {
-        this.socket = new WebSocket(url);
+
+        this.socket = new WebSocketClass(url);
         this.socket.binaryType = "arraybuffer";
 
         if (this.debugMode) {
