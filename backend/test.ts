@@ -61,7 +61,7 @@ class Thing {
         return g;
     }
 
-    public print(st:any){
+    public print(st: any) {
         console.log("print any:" + st);
     }
 
@@ -100,7 +100,7 @@ function main() {
 
     hjserver.registerType(Thing, "Thing");
     hjserver.registerMethod(Thing, "speak");
-    hjserver.registerMethod(Thing,"print");
+    hjserver.registerMethod(Thing, "print");
     hjserver.registerObject(t, "testobj");
 
 
@@ -116,9 +116,12 @@ function main() {
     httpServer.listen(4000);
 
 
-    var c = new hj.HyperjumpClient(new WebSocket("http://localhost:4000/test"));
+    var c = new hj.HyperjumpClient();
+    c.loglevel = 1;
+    c.debugMode = true;
+    c.connect("http://localhost:4000/test");
 
-    c.on("root", async () => {
+    c.on("ready", async () => {
         console.log("Root!");
 
         let t = await c.root.getObject("testobj");
@@ -126,7 +129,7 @@ function main() {
         let ret = await t.speak("perry");
 
         let count = 0;
-        let listener = (source:any, val:any) => {
+        let listener = (source: any, val: any) => {
             console.log("tick " + val);
             count++;
             if (count == 2) {

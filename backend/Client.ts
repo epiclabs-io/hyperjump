@@ -2,20 +2,6 @@
 import * as Protocol from "./Protocol";
 import {EventEmitter} from "./EventEmitter";
 
-var log = {
-    log: function (type: string, st: string) {
-        console.log(`hyperjump-client [${type}]: ${st}`);
-    },
-    info: function (st: string) {
-        this.log("INFO", st);
-    },
-    warn: function (st: string) {
-        this.log("WARN", st);
-    },
-    error: function (st: string) {
-        this.log("ERROR", st);
-    },
-}
 
 export interface ILocalTypeInfo extends Protocol.ITypeInfo {
     prototype: { new (): any };
@@ -48,18 +34,61 @@ export class HyperjumpClient extends EventEmitter {
     private tracklist = new Map<number, IRemoteObjectInfo>();
     private binaryBufferList = new Map<number, ArrayBuffer>();
     private nextBinaryDataHeaderCommand: Protocol.IBinaryDataHeaderCommand;
+    private debugMethodList: Map<number, string>;
+    public debugMode = false;
 
-    constructor(socket: any) {
+
+    private log = {
+        log: function (type: string, st: string) {
+            console.log(`hyperjump-client [${type}]: ${st}`);
+        },
+        info: function (st: string) {
+            if (this.loglevel >= 3)
+                this.log("INFO", st);
+        },
+        warn: function (st: string) {
+            if (this.loglevel >= 2)
+                this.log("WARN", st);
+        },
+        error: function (st: string) {
+            if (this.loglevel >= 1)
+                this.log("ERROR", st);
+        },
+        loglevel: 1
+    }
+    constructor() {
         super();
-        this.socket = socket;
+        this.registerTypeInfo(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
+    }
+
+    get loglevel() {
+        return this.log.loglevel;
+    }
+
+    set loglevel(level: number) {
+        this.log.loglevel = level;
+    }
+
+    private debug(...args: any[]) {
+        if (this.debugMode)
+            console.log.apply(console, arguments);
+    }
+
+    public connect(url: string) {
+        this.socket = new WebSocket(url);
         this.socket.binaryType = "arraybuffer";
 
+        if (this.debugMode) {
+            this.debugMethodList = new Map<number, string>();
+        }
+
         this.socket.onopen = async () => {
-            console.log("socket open");
+            this.log.info("socket open");
+            this.emit("onopen");
             //obtain a reference to the root object
             let root = { _byRef: 0 };
             this.root_ = await this.invokeRemoteFunction(Protocol.ROOT_FUNCTION_GET_OBJECT, root, [0] as any)
-            this.emit("root");
+            this.emit("ready");
 
             this.schedulePing();
 
@@ -70,12 +99,12 @@ export class HyperjumpClient extends EventEmitter {
                 this.processMessage(JSON.parse(event.data));
             else { //binary data
                 if (!this.nextBinaryDataHeaderCommand) {
-                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received without header");
+                    this.log.error("PROTOCOL ERROR: Binary data received without header");
                     return;
                 }
                 let buf = event.data as ArrayBuffer;
                 if (buf.byteLength != this.nextBinaryDataHeaderCommand.length) {
-                    console.error("HYPERJUMP PROTOCOL ERROR: Binary data received length mismatch");
+                    this.log.error("PROTOCOL ERROR: Binary data received length mismatch");
                     return;
                 }
 
@@ -85,11 +114,15 @@ export class HyperjumpClient extends EventEmitter {
         };
 
         this.socket.onerror = (ev) => {
-            log.error(ev.toString());
+            this.log.error("Socket error " + (ev as any).code);
         }
 
-        this.registerTypeInfo(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
-
+        this.socket.onclose = () => {
+            this.log.warn("Socket closed")
+            setTimeout(() => {
+                this.connect(url);
+            }, 5000);
+        }
     }
 
     public get root(): Protocol.IRoot {
@@ -110,7 +143,7 @@ export class HyperjumpClient extends EventEmitter {
 
 
     private processMessage(cmd: Protocol.ICommand) {
-        console.log(cmd);
+        this.debug("HyperjumpClient.processMessage", cmd);
         switch (cmd.command) {
             case "result": this.process_result(cmd as Protocol.IInvokeResultCommand); break;
             case "event": this.process_event(cmd as Protocol.IEventFiredCommand); break;
@@ -131,7 +164,11 @@ export class HyperjumpClient extends EventEmitter {
         //Proto["_type"] = typeInfo.name;
 
         for (var methodName of Object.keys(typeInfo.methods)) {
-            Proto.prototype[methodName] = this.generateProxyFunction(typeInfo.methods[methodName]);
+            let functionId = typeInfo.methods[methodName];
+            Proto.prototype[methodName] = this.generateProxyFunction(functionId);
+            if (this.debugMode) {
+                this.debugMethodList.set(functionId, typeInfo.name + "." + methodName);
+            }
         }
 
         for (var methodName of Object.keys(typeInfo.clientMethods)) {
@@ -177,6 +214,10 @@ export class HyperjumpClient extends EventEmitter {
                 callId: this.idCall,
                 thisArg: { _byRef: 0 }, //Root
                 args: [typeName],
+            }
+
+            if (this.debugMode) {
+                cmd.debugInfo = `root.getType(${typeName})`;
             }
             this.send(cmd);
 
@@ -254,7 +295,7 @@ export class HyperjumpClient extends EventEmitter {
             if (obj._type === "Buffer") {
                 let buf = this.binaryBufferList.get(obj.id);
                 if (!buf) {
-                    console.error(`HYPERJUMP PROTOCOL ERROR: Can't retrieve buffer with id ${obj.id}`);
+                    this.log.error(`PROTOCOL ERROR: Can't retrieve buffer with id ${obj.id}`);
                     return;
                 }
                 this.binaryBufferList.delete(obj.id);
@@ -370,7 +411,7 @@ export class HyperjumpClient extends EventEmitter {
 
     private async process_buffer(cmd: Protocol.IBinaryDataHeaderCommand) {
         if (this.nextBinaryDataHeaderCommand) {
-            console.error("HYPERJUMP PROTOCOL ERROR: new binary data header received before receiving binary data");
+            this.log.error("PROTOCOL ERROR: new binary data header received before receiving binary data");
             return;
         }
 
@@ -410,6 +451,12 @@ export class HyperjumpClient extends EventEmitter {
                 callId: this.idCall,
                 thisArg: thisArg,
                 args: a,
+            }
+            if (this.debugMode) {
+                let functionName = this.debugMethodList.get(id);
+                if (functionName === undefined)
+                    functionName = "#" + id.toString();
+                cmd.debugInfo = functionName;
             }
             this.send(cmd);
 

@@ -56,7 +56,10 @@ declare module "hyperjump/client-browser/Client" {
 
     export class HyperjumpClient extends EventEmitter {
         root: IRoot;
-        constructor(socket: any);
+        constructor();
+        connect(url:string):void;
+        loglevel:number;
+        debugMode:boolean;
         registerTypeInfo(type: Function, typeInfo: ILocalTypeInfo): void;
         track(obj: any): IRemoteObjectInfo;
         untrack(obj: any): void;

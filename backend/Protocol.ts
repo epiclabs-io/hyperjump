@@ -37,6 +37,7 @@ export interface IByRef {
 
 export interface ICommand {
     command: string,
+    debugInfo?:string
 }
 export interface IRoot {
     getType(typeName: string): Promise<ITypeInfo>;
