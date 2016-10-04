@@ -40,6 +40,11 @@ class Person extends Being {
     public greet(): string {
         return "Hello, " + this.name;
     }
+
+    public static serializeMetadata: hj.IPropertyInfo = {
+        age: "Number",
+        name: "String"
+    }
 }
 
 
@@ -78,6 +83,12 @@ class Thing {
         x.set(55, "qué tal");
         x.set(4, { color: "blue" });
         return x;
+    }
+
+    public static serializeMetadata: hj.IPropertyInfo = {
+        color: "String",
+        size: "Number",
+        owner: "Person"
     }
 
 
@@ -119,8 +130,6 @@ function main() {
     hjserver.registerMethod(Thing, "getMap");
     hjserver.registerObject(t, "testobj");
 
-    hjserver.root.color="green";
-
 
     setInterval(() => {
         hjserver.fireEvent(t, "tick", new Date());
@@ -144,6 +153,7 @@ function main() {
         console.log((c.root as any).color);
 
         let t = await c.root.getObject("testobj");
+        console.log("ThingColor = " + t.color);
 
         let ret = await t.speak("perry");
 

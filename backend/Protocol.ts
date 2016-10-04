@@ -22,9 +22,18 @@ export interface ISerializationInfo {
     deserializerDef: IFunctionDefinition;
 }
 
+export type IPropertyInfo = { [propertyName: string]: string };
+export type ISerializeMetadata = IPropertyInfo;
+
+
+export interface Type extends Function {
+    serializeMetadata?: ISerializeMetadata;
+}
+
 export interface ITypeInfo {
     name: string,
     methods: { [methodName: string]: number };
+    properties: IPropertyInfo;
     clientMethods: { [methodName: string]: IFunctionDefinition };
     serializationInfo?: ISerializationInfo;
     referenceType: RefType;
@@ -76,6 +85,7 @@ export var DateTypeInfo: ITypeInfo = {
     name: "Date",
     methods: null,
     clientMethods: null,
+    properties: {},
     referenceType: RefType.VALUE,
     serializationInfo: {
         serialize: (obj: any): any => {
@@ -94,6 +104,7 @@ export var MapTypeInfo: ITypeInfo = {
     name: "Map",
     methods: null,
     clientMethods: null,
+    properties: {},
     referenceType: RefType.VALUE,
 
     serializationInfo: {

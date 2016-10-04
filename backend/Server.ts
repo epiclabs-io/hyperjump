@@ -58,7 +58,7 @@ export class HyperjumpServer extends events.EventEmitter {
 
     private objects: WeakMap<any, IObjectInfo>;
     private functions = new Map<number, Function>();
-    private types: WeakMap<Function, Protocol.ITypeInfo>;
+    private types: WeakMap<Protocol.Type, Protocol.ITypeInfo>;
     private typesByName: Map<string, Protocol.ITypeInfo>;
     private objectIds: Map<number, IObjectInfo>;
     private objectsByName = new Map<string, any>();
@@ -208,21 +208,28 @@ export class HyperjumpServer extends events.EventEmitter {
         return objectInfo;
     }
 
-    public registerTypeInfo(type: Function, typeInfo: Protocol.ITypeInfo) {
+    public registerTypeInfo(type: Protocol.Type, typeInfo: Protocol.ITypeInfo) {
         this.types.set(type, typeInfo);
         this.typesByName.set(typeInfo.name, typeInfo);
     }
 
-    public registerType(type: Function, name?: string, referenceType: Protocol.RefType = Protocol.RefType.REFVALUE): Protocol.ITypeInfo {
+    public registerType(type: Protocol.Type, name?: string, referenceType: Protocol.RefType = Protocol.RefType.REFVALUE): Protocol.ITypeInfo {
         let typeInfo = this.types.get(type);
         if (typeInfo)
             throw new Error(`Type ${typeInfo.name} already registered`);
+
+        let properties: { [propertyName: string]: string };
+        if (type.serializeMetadata)
+            properties = type.serializeMetadata;
+        else
+            properties = undefined;
 
         typeInfo = {
             name: name || type.name,
             methods: {},
             clientMethods: {},
-            referenceType: referenceType
+            referenceType: referenceType,
+            properties: properties
         }
 
         this.registerTypeInfo(type, typeInfo);
@@ -230,8 +237,7 @@ export class HyperjumpServer extends events.EventEmitter {
         return typeInfo;
     }
 
-
-    public registerMethodEx(type: Function, func: Function, name?: string) {
+    public registerMethodEx(type: Protocol.Type, func: Function, name?: string) {
         if (!func)
             throw new Error("cant' register undefined function");
         let typeInfo = this.types.get(type);
@@ -241,16 +247,16 @@ export class HyperjumpServer extends events.EventEmitter {
         typeInfo.methods[name || func.name] = this.registerFunction(func);
     }
 
-    public registerMethod(type: Function, name: string) {
+    public registerMethod(type: Protocol.Type, name: string) {
         this.registerMethodEx(type, type.prototype[name], name);
     }
-    public registerMethods(type: Function, methodNames: string[]) {
+    public registerMethods(type: Protocol.Type, methodNames: string[]) {
         methodNames.forEach(name => {
             this.registerMethod(type, name);
         });
     }
 
-    public registerClientMethodEx(type: Function, func: Function | string, name: string) {
+    public registerClientMethodEx(type: Protocol.Type, func: Function | string, name: string) {
         let parsed = parseFunction(func);
         let clientMethodInfo: Protocol.IFunctionDefinition = {
             args: parsed.args,
@@ -263,11 +269,39 @@ export class HyperjumpServer extends events.EventEmitter {
         typeInfo.clientMethods[name] = clientMethodInfo;
     }
 
-    public registerClientMethod(type: Function, name: string) {
+    public registerProperty(type: Protocol.Type, propertyName: string, propertyType?: Protocol.Type | string) {
+        let typeInfo = this.types.get(type);
+        if (!typeInfo) {
+            typeInfo = this.registerType(type);
+        }
+
+        let propertyTypeName: string;
+        if (typeof propertyType === "function") {
+            let propertyTypeInfo = this.types.get(propertyType);
+            if (propertyTypeInfo)
+                propertyTypeName = propertyTypeInfo.name;
+            else
+                propertyTypeName = propertyType.name;
+        }
+        else
+            propertyTypeName = propertyType;
+        if (!typeInfo.properties) {
+            typeInfo.properties = {};
+        }
+        typeInfo.properties[propertyName] = propertyTypeName;
+    }
+
+    public registerProperties(type: Protocol.Type, properties: { [propertyName: string]: Protocol.Type | string }) {
+        Object.keys(properties).forEach(propertyName => {
+            this.registerProperty(type, propertyName, properties[propertyName]);
+        })
+    }
+
+    public registerClientMethod(type: Protocol.Type, name: string) {
         this.registerClientMethodEx(type, type.prototype[name], name);
     }
 
-    public registerClientMethods(type: Function, methodNames: string[]) {
+    public registerClientMethods(type: Protocol.Type, methodNames: string[]) {
         methodNames.forEach(name => {
             this.registerClientMethod(type, name);
         });
@@ -280,7 +314,7 @@ export class HyperjumpServer extends events.EventEmitter {
         return id;
     }
 
-    public registerSerializer(type: Function, serializationInfo: Protocol.ISerializationInfo) {
+    public registerSerializer(type: Protocol.Type, serializationInfo: Protocol.ISerializationInfo) {
         let typeInfo = this.types.get(type);
         if (!typeInfo)
             throw new Error("Can't set serializer to unregistered type");
@@ -300,7 +334,7 @@ export class HyperjumpServer extends events.EventEmitter {
     }
 
     public createGenericType(name: string): { new (): any } {
-        let type = function () { };
+        let type = new Function() as Protocol.Type;
         this.registerType(type, name);
         return type as any;
     }
@@ -532,19 +566,29 @@ export class Agent {
         let type = this.hjs.getTypeInfo(obj);
 
         let originalObject = obj;
-
+        let keys: string[];
         if (type) {
-            if (type.referenceType == Protocol.RefType.REFONLY)
+            if (type.referenceType == Protocol.RefType.REFONLY) {
                 obj = {};
+                keys = [];
+            }
             else {
                 if (type.serializationInfo && type.serializationInfo.serialize) {
                     obj = type.serializationInfo.serialize(obj);
+                    keys = Object.keys(obj);
                 }
+                else
+                    if (type.properties)
+                        keys = Object.keys(type.properties);
+                    else
+                        keys = Object.keys(obj);
             }
         }
+        else
+            keys = Object.keys(obj);
 
         let ret: any = {};
-        let keys = Object.keys(obj);
+
         keys.forEach(key => {
             ret[key] = this.serialize(obj[key]);
         });
