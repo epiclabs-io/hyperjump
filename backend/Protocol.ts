@@ -39,6 +39,22 @@ export interface ITypeInfo {
     referenceType: RefType;
 }
 
+
+
+export type IPropertyMetadata = string;
+
+export interface ITypeMetadata {
+    name: string;
+    referenceType: RefType;
+    methods: string[];
+    clientMethods: { [methodName: string]: Function };
+    properties: { [propertyName: string]: IPropertyMetadata };
+    serialize: (obj: any) => any;
+    deserialize: (obj: any) => any;
+}
+
+
+
 export interface IByRef {
     _construct?: ITypeInfo,
     _byRef: number
