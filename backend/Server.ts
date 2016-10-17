@@ -218,6 +218,15 @@ export class HyperjumpServer extends events.EventEmitter {
         if (typeInfo)
             throw new Error(`Type ${typeInfo.name} already registered`);
 
+
+        if (type.typeMetadata) {
+            name = name || type.typeMetadata.name;
+            if (type.typeMetadata.referenceType !== undefined)
+                referenceType = type.typeMetadata.referenceType;
+        }
+
+        name = name || type.name;
+
         let properties: { [propertyName: string]: string };
         if (type.serializeMetadata)
             properties = type.serializeMetadata;
@@ -225,7 +234,7 @@ export class HyperjumpServer extends events.EventEmitter {
             properties = undefined;
 
         typeInfo = {
-            name: name || type.name,
+            name: name,
             methods: {},
             clientMethods: {},
             referenceType: referenceType,
@@ -233,6 +242,33 @@ export class HyperjumpServer extends events.EventEmitter {
         }
 
         this.registerTypeInfo(type, typeInfo);
+
+        if (type.typeMetadata) {
+            if (type.typeMetadata.methods) {
+                type.typeMetadata.methods.forEach(methodName => {
+                    this.registerMethod(type, methodName);
+                });
+            }
+            if (type.typeMetadata.properties) {
+                for (let propertyName in type.typeMetadata.properties) {
+                    this.registerProperty(type, propertyName, type.typeMetadata.properties[propertyName]);
+                }
+            }
+            if (type.typeMetadata.clientMethods) {
+                for (let clientMethodName in type.typeMetadata.clientMethods) {
+                    this.registerClientMethodEx(type, type.typeMetadata.clientMethods[clientMethodName], clientMethodName);
+                }
+            }
+            if (type.typeMetadata.serialize || type.typeMetadata.deserialize) {
+                let serializationInfo: Protocol.ISerializationInfo = {
+                    serialize: type.typeMetadata.serialize,
+                    deserialize: type.typeMetadata.deserialize
+                }
+                this.registerSerializer(type, serializationInfo);
+            }
+
+
+        }
 
         return typeInfo;
     }

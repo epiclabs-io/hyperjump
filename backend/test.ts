@@ -91,6 +91,16 @@ class Thing {
         owner: "Person"
     }
 
+    public static typeMetadata: hj.ITypeMetadata = {
+        name: "Thing",
+        properties: {
+            color: "String",
+            size: "Number",
+            owner: "Person"
+        },
+        methods:["speak","print","getMap"]
+    }
+
 
 
 }
@@ -125,9 +135,6 @@ function main() {
     });
 
     hjserver.registerType(Thing, "Thing");
-    hjserver.registerMethod(Thing, "speak");
-    hjserver.registerMethod(Thing, "print");
-    hjserver.registerMethod(Thing, "getMap");
     hjserver.registerObject(t, "testobj");
 
 

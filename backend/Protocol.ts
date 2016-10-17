@@ -18,8 +18,8 @@ export enum RefType {
 export interface ISerializationInfo {
     serialize: (obj: any) => any;
     deserialize: (obj: any) => any;
-    serializerDef: IFunctionDefinition;
-    deserializerDef: IFunctionDefinition;
+    serializerDef?: IFunctionDefinition;
+    deserializerDef?: IFunctionDefinition;
 }
 
 export type IPropertyInfo = { [propertyName: string]: string };
@@ -28,6 +28,7 @@ export type ISerializeMetadata = IPropertyInfo;
 
 export interface Type extends Function {
     serializeMetadata?: ISerializeMetadata;
+    typeMetadata?: ITypeMetadata;
 }
 
 export interface ITypeInfo {
@@ -39,18 +40,16 @@ export interface ITypeInfo {
     referenceType: RefType;
 }
 
-
-
 export type IPropertyMetadata = string;
 
 export interface ITypeMetadata {
-    name: string;
-    referenceType: RefType;
-    methods: string[];
-    clientMethods: { [methodName: string]: Function };
-    properties: { [propertyName: string]: IPropertyMetadata };
-    serialize: (obj: any) => any;
-    deserialize: (obj: any) => any;
+    name?: string;
+    referenceType?: RefType;
+    methods?: string[];
+    clientMethods?: { [methodName: string]: Function };
+    properties?: { [propertyName: string]: IPropertyMetadata };
+    serialize?: (obj: any) => any;
+    deserialize?: (obj: any) => any;
 }
 
 
