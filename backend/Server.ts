@@ -164,7 +164,7 @@ export class HyperjumpServer extends events.EventEmitter {
         this.getObjectInfo(obj).lastPing = -1;
     }
 
-    private removeAgent(agent: Agent) {
+    public removeAgent(agent: Agent) {
         agent.terminate();
         this.objectIds.forEach(objInfo => {
             if (objInfo.events) {
@@ -682,7 +682,11 @@ export class Agent {
 
     private bufferId = 0;
     private send(data: any) {
-        this.socket.send(JSON.stringify(data));
+        if(this.socket.readyState == WebSocket.OPEN)
+            this.socket.send(JSON.stringify(data));
+        else {
+            this.hjs.removeAgent(this);
+        }
     }
 
     private sendBuffer(buf: Buffer) {
