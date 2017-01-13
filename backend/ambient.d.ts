@@ -1,7 +1,7 @@
 
 declare module "hyperjump/client-browser/Client" {
 
-    class EventEmitter {
+    export class EventEmitter {
         private listeners;
         constructor();
         on(label: string, callback: Function): void;

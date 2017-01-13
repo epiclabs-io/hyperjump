@@ -1,6 +1,7 @@
 
 import * as Protocol from "./Protocol";
-import {EventEmitter} from "./EventEmitter";
+import { EventEmitter } from "./EventEmitter";
+export { EventEmitter } from "./EventEmitter";
 
 
 export interface ILocalTypeInfo extends Protocol.ITypeInfo {
@@ -21,6 +22,11 @@ export interface IRemoteObjectInfo {
     obj: any;
 }
 
+interface IQueueItem {
+    data: any;
+    next: IQueueItem
+}
+
 // hack to use either the native browser WebSocket or nodejs' ws.
 var WebSocketClass: any;
 try {
@@ -28,7 +34,7 @@ try {
 }
 catch (e) { }
 
-if (WebSocketClass === undefined) 
+if (WebSocketClass === undefined)
     WebSocketClass = require("ws");
 
 const PING_OBJECTS_PERIOD = 60 * 1000;
@@ -69,7 +75,7 @@ export class HyperjumpClient extends EventEmitter {
     constructor() {
         super();
         this.registerTypeInfo(Date, Protocol.DateTypeInfo as ILocalTypeInfo);
-        this.registerTypeInfo(Map,Protocol.MapTypeInfo as ILocalTypeInfo);
+        this.registerTypeInfo(Map, Protocol.MapTypeInfo as ILocalTypeInfo);
     }
 
     get loglevel() {
@@ -106,23 +112,40 @@ export class HyperjumpClient extends EventEmitter {
 
         };
 
-        this.socket.onmessage = (event) => {
-            if (typeof event.data === "string")
-                this.processMessage(JSON.parse(event.data));
-            else { //binary data
-                if (!this.nextBinaryDataHeaderCommand) {
-                    this.log.error("PROTOCOL ERROR: Binary data received without header");
-                    return;
-                }
-                let buf = event.data as ArrayBuffer;
-                if (buf.byteLength != this.nextBinaryDataHeaderCommand.length) {
-                    this.log.error("PROTOCOL ERROR: Binary data received length mismatch");
-                    return;
-                }
+        let queue: any[] = undefined;
 
-                this.binaryBufferList.set(this.nextBinaryDataHeaderCommand.id, buf);
-                this.nextBinaryDataHeaderCommand = undefined;
+        this.socket.onmessage = (event) => {
+            if (!queue) {
+                queue = [event.data];
+
+                setTimeout(() => {
+                    queue.forEach((data: any) => {
+
+                        if (typeof data === "string")
+                            this.processMessage(JSON.parse(data));
+                        else { //binary data
+                            if (!this.nextBinaryDataHeaderCommand) {
+                                this.log.error("PROTOCOL ERROR: Binary data received without header");
+                                return;
+                            }
+                            let buf = data as ArrayBuffer;
+                            if (buf.byteLength != this.nextBinaryDataHeaderCommand.length) {
+                                this.log.error("PROTOCOL ERROR: Binary data received length mismatch");
+                                return;
+                            }
+
+                            this.binaryBufferList.set(this.nextBinaryDataHeaderCommand.id, buf);
+                            this.nextBinaryDataHeaderCommand = undefined;
+                        }
+                    });
+
+                    queue = undefined;
+
+                }, 1);
             }
+            else
+                queue.push(event.data);
+
         };
 
         this.socket.onerror = (ev) => {
